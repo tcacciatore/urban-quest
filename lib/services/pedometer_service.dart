@@ -3,40 +3,49 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class PedometerService {
   static const _keyDailyBaseline = 'pedometer_daily_baseline';
-  static const _keyBaselineDate = 'pedometer_baseline_date';
+  static const _keyBaselineDate   = 'pedometer_baseline_date';
 
-  Future<void> requestPermissions() async {
-    // La permission est demandée automatiquement au premier accès au stream
-  }
+  /// Stream partagé (broadcast) — un seul abonnement au capteur, plusieurs écouteurs.
+  Stream<int>? _sharedStream;
+
+  Future<void> requestPermissions() async {}
 
   /// Stream des pas du jour (réinitialise à minuit).
+  /// Un seul abonnement actif quelle que soit le nombre d'écouteurs.
   Stream<int> stepCountStream() {
-    return Pedometer.stepCountStream.asyncMap((event) async {
-      final prefs = await SharedPreferences.getInstance();
-      final today = _todayKey();
-      final savedDate = prefs.getString(_keyBaselineDate);
+    _sharedStream ??= Pedometer.stepCountStream
+        .asyncMap(_toDailySteps)
+        .distinct()
+        .asBroadcastStream();
+    return _sharedStream!;
+  }
 
-      // Nouveau jour ou premier lancement → réinitialise la baseline
-      if (savedDate != today) {
-        await prefs.setInt(_keyDailyBaseline, event.steps);
-        await prefs.setString(_keyBaselineDate, today);
-        return 0;
-      }
+  Future<int> _toDailySteps(StepCount event) async {
+    final prefs = await SharedPreferences.getInstance();
+    final today = _todayKey();
+    final savedDate = prefs.getString(_keyBaselineDate);
 
-      final baseline = prefs.getInt(_keyDailyBaseline) ?? event.steps;
+    // Nouveau jour ou premier lancement → nouvelle baseline
+    if (savedDate != today) {
+      await prefs.setInt(_keyDailyBaseline, event.steps);
+      await prefs.setString(_keyBaselineDate, today);
+      return 0;
+    }
 
-      // Reboot détecté (steps < baseline) → réinitialise
-      if (event.steps < baseline) {
-        await prefs.setInt(_keyDailyBaseline, 0);
-        return event.steps;
-      }
+    final baseline = prefs.getInt(_keyDailyBaseline) ?? event.steps;
 
-      return event.steps - baseline;
-    }).distinct();
+    // Reboot détecté (compteur remis à zéro par l'OS)
+    if (event.steps < baseline) {
+      await prefs.setInt(_keyDailyBaseline, event.steps);
+      await prefs.setString(_keyBaselineDate, today);
+      return 0;
+    }
+
+    return event.steps - baseline;
   }
 
   String _todayKey() {
     final now = DateTime.now();
-    return '${now.year}-${now.month}-${now.day}';
+    return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
   }
 }

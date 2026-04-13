@@ -29,6 +29,9 @@ dependencies:
   hive_ce_flutter: ^2.2.0
   shared_preferences: ^2.5.3
 
+  # --- Boussole ---
+  sensors_plus: ^6.1.0
+
   # --- Podomètre ---
   pedometer: ^4.1.0
   permission_handler: ^11.4.0

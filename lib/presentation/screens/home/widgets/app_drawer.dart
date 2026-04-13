@@ -10,10 +10,14 @@ import '../../../../domain/entities/trophy.dart';
 import '../../../../theme/app_colors.dart';
 import '../../../../theme/app_text.dart';
 import '../../../providers/city_fog_provider.dart';
+import '../../../providers/poi_providers.dart';
 import '../../../../domain/entities/city.dart';
+import '../../../../domain/entities/city_poi.dart';
 
 class AppDrawer extends ConsumerWidget {
-  const AppDrawer({super.key});
+  final void Function(String cityId, LatLng center)? onCitySelected;
+  final String? selectedCityId;
+  const AppDrawer({super.key, this.onCitySelected, this.selectedCityId});
 
   void _confirmReset(BuildContext context, WidgetRef ref) {
     showDialog(
@@ -126,13 +130,16 @@ class AppDrawer extends ConsumerWidget {
             Divider(color: AppColors.sandLight, height: 1),
             const SizedBox(height: 8),
 
-            // ── Progression de découverte ──────────────────────────────────
-            const _DiscoveryProgress(),
-
             Expanded(
               child: ListView(
                 padding: EdgeInsets.zero,
                 children: [
+                  // ── Progression de découverte ────────────────────────────
+                  _DiscoveryProgress(
+                    onCitySelected: onCitySelected,
+                    selectedCityId: selectedCityId,
+                  ),
+
                   // Bouton reset (testMode uniquement)
                   if (AppConstants.testMode)
                     Padding(
@@ -400,32 +407,128 @@ class _LoadingHint extends StatelessWidget {
       );
 }
 
-// ─── Progression de découverte de la ville ────────────────────────────────────
+// ─── Liste de toutes les villes en cours de découverte ───────────────────────
 
 class _DiscoveryProgress extends ConsumerWidget {
-  const _DiscoveryProgress();
+  final void Function(String cityId, LatLng center)? onCitySelected;
+  final String? selectedCityId;
+  const _DiscoveryProgress({this.onCitySelected, this.selectedCityId});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final fog = ref.watch(cityFogProvider);
-    final city = fog.currentCity;
-    if (city == null) return const SizedBox.shrink();
+    final poiState = ref.watch(poiProvider);
 
+    // Toutes les villes chargées — ville courante en tête, déverrouillées en bas,
+    // puis par progression décroissante
+    final cities = fog.cities.values.toList()
+      ..sort((a, b) {
+        final aCurrent = a.id == fog.currentCityId;
+        final bCurrent = b.id == fog.currentCityId;
+        if (aCurrent != bCurrent) return aCurrent ? -1 : 1;
+        if (a.isUnlocked != b.isUnlocked) return a.isUnlocked ? 1 : -1;
+        return b.revealedRatio.compareTo(a.revealedRatio);
+      });
+
+    final List<Widget> children;
+    if (fog.isLoading && cities.isEmpty) {
+      children = [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+          child: Row(
+            children: [
+              const SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(color: AppColors.terra, strokeWidth: 2),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                'Localisation du quartier…',
+                style: AppText.label.copyWith(color: AppColors.sand),
+              ),
+            ],
+          ),
+        ),
+      ];
+    } else if (cities.isEmpty) {
+      children = [_EmptyHint('Aucune ville encore.\nCommence à marcher !')];
+    } else {
+      children = cities
+          .map((city) => _CityProgressTile(
+                city: city,
+                isCurrent: city.id == fog.currentCityId,
+                isSelected: city.id == selectedCityId,
+                pois: poiState.forCity(city.id),
+                onCitySelected: onCitySelected,
+              ))
+          .toList();
+    }
+
+    return _SectionTile(
+      emoji: '🏙️',
+      title: 'Villes à découvrir',
+      children: children,
+    );
+  }
+}
+
+class _CityProgressTile extends StatelessWidget {
+  final City city;
+  final bool isCurrent;
+  final bool isSelected;
+  final List<CityPoi> pois;
+  final void Function(String cityId, LatLng center)? onCitySelected;
+
+  const _CityProgressTile({
+    required this.city,
+    required this.isCurrent,
+    required this.isSelected,
+    required this.pois,
+    this.onCitySelected,
+  });
+
+  LatLng _centroid(List<LatLng> polygon) {
+    final lat = polygon.map((p) => p.latitude).reduce((a, b) => a + b) / polygon.length;
+    final lon = polygon.map((p) => p.longitude).reduce((a, b) => a + b) / polygon.length;
+    return LatLng(lat, lon);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final isUnlocked = city.isUnlocked;
-    final ratio = (city.revealedRatio / City.requiredRatio).clamp(0.0, 1.0);
+    final ratio   = (city.revealedRatio / City.requiredRatio).clamp(0.0, 1.0);
     final percent = (city.revealedRatio * 100).round();
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-      child: Container(
-        padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+      child: GestureDetector(
+        onTap: onCitySelected == null || city.polygon.isEmpty
+            ? null
+            : () {
+                Navigator.of(context).pop(); // ferme le drawer
+                onCitySelected!(city.id, _centroid(city.polygon));
+              },
+        child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
-          color: isUnlocked ? AppColors.forestLight : AppColors.white,
-          borderRadius: BorderRadius.circular(12),
+          color: isSelected
+              ? AppColors.terra.withValues(alpha: 0.10)
+              : isUnlocked
+                  ? AppColors.forestLight
+                  : isCurrent
+                      ? AppColors.white
+                      : AppColors.parchment,
+          borderRadius: BorderRadius.circular(10),
           border: Border.all(
-            color: isUnlocked
-                ? AppColors.forest.withValues(alpha: 0.30)
-                : AppColors.sandLight,
+            color: isSelected
+                ? AppColors.terra.withValues(alpha: 0.70)
+                : isUnlocked
+                    ? AppColors.forest.withValues(alpha: 0.30)
+                    : isCurrent
+                        ? AppColors.terra.withValues(alpha: 0.40)
+                        : AppColors.sandLight,
+            width: isSelected ? 1.5 : 1.0,
           ),
         ),
         child: Column(
@@ -434,66 +537,65 @@ class _DiscoveryProgress extends ConsumerWidget {
             Row(
               children: [
                 Text(
-                  isUnlocked ? '🏙️' : '🗺️',
-                  style: const TextStyle(fontSize: 16),
+                  isSelected ? '📌' : isUnlocked ? '🏙️' : isCurrent ? '📍' : '🗺️',
+                  style: const TextStyle(fontSize: 14),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     city.name,
                     style: AppText.body.copyWith(
+                      fontSize: 13,
                       fontWeight: FontWeight.w600,
                       color: isUnlocked ? AppColors.forest : AppColors.ink,
                     ),
                   ),
                 ),
-                Text(
-                  '$percent %',
-                  style: AppText.metric.copyWith(
-                    fontWeight: FontWeight.bold,
-                    color: isUnlocked ? AppColors.forest : AppColors.terra,
-                  ),
-                ),
+                percent >= 100
+                    ? const Text('✅', style: TextStyle(fontSize: 16))
+                    : Text(
+                        '$percent %',
+                        style: AppText.label.copyWith(
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0,
+                          color: isUnlocked ? AppColors.forest : AppColors.terra,
+                        ),
+                      ),
               ],
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 8),
             ClipRRect(
-              borderRadius: BorderRadius.circular(4),
+              borderRadius: BorderRadius.circular(3),
               child: LinearProgressIndicator(
                 value: ratio,
-                minHeight: 5,
+                minHeight: 4,
                 backgroundColor: AppColors.sandLight,
                 valueColor: AlwaysStoppedAnimation(
                   isUnlocked ? AppColors.forest : AppColors.terra,
                 ),
               ),
             ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Icon(
-                  isUnlocked ? Icons.check_circle_rounded : Icons.lock_rounded,
-                  size: 13,
-                  color: isUnlocked ? AppColors.forest : AppColors.sand,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  isUnlocked
-                      ? 'Ville déverrouillée !'
-                      : '🔒 $percent\u202f% explorés\u00a0/ ${(City.requiredRatio * 100).round()}% requis',
-                  style: AppText.label.copyWith(
-                    letterSpacing: 0,
-                    color: isUnlocked
-                        ? AppColors.forest
-                        : AppColors.ink.withValues(alpha: 0.55),
-                  ),
-                ),
-              ],
-            ),
+            if (pois.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: pois.map((poi) {
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: Opacity(
+                      opacity: poi.isDiscovered ? 0.35 : 1.0,
+                      child: Text(
+                        poi.emoji,
+                        style: const TextStyle(fontSize: 16),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ],
           ],
+        ),
         ),
       ),
     );
   }
-
 }

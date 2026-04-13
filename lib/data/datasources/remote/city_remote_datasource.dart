@@ -8,7 +8,7 @@ class CityRemoteDatasource {
   final Dio _dio;
   CityRemoteDatasource(this._dio);
 
-  /// Retourne la ville courante + ses voisines directes (communes partageant une frontière).
+  /// Retourne uniquement la ville courante.
   Future<({List<City> cities, String? currentCityId})> fetchCityAndNeighbors(
     LatLng position,
   ) async {
@@ -18,8 +18,11 @@ class CityRemoteDatasource {
       return (cities: <City>[], currentCityId: null);
     }
     debugPrint('[CityFog] commune courante: $currentRelId');
-    final cities = await _fetchCityWithNeighbors(currentRelId);
-    return (cities: cities, currentCityId: currentRelId);
+    final city = await _fetchSingleCity(currentRelId);
+    return (
+      cities: city != null ? [city] : <City>[],
+      currentCityId: currentRelId,
+    );
   }
 
   // ─── Privé ────────────────────────────────────────────────────────────────
@@ -56,19 +59,6 @@ class CityRemoteDatasource {
     }
   }
 
-  /// Commune courante + voisines via bounding box (2 requêtes légères).
-  Future<List<City>> _fetchCityWithNeighbors(String cityRelId) async {
-    // Étape 1 : géométrie de la ville courante seule
-    final currentCity = await _fetchSingleCity(cityRelId);
-    if (currentCity == null) return [];
-
-    // Étape 2 : voisines dans la bbox de la ville courante
-    final bbox = _bbox(currentCity.polygon);
-    final neighbors = await _fetchCitiesInBbox(bbox, excludeId: cityRelId);
-
-    return [currentCity, ...neighbors];
-  }
-
   Future<City?> _fetchSingleCity(String relId) async {
     final query = '[out:json][timeout:30];\nrel($relId);\nout geom;';
     try {
@@ -84,50 +74,6 @@ class CityRemoteDatasource {
       debugPrint('[CityFog] erreur _fetchSingleCity($relId): $e');
       return null;
     }
-  }
-
-  Future<List<City>> _fetchCitiesInBbox(
-    ({double s, double w, double n, double e}) bbox, {
-    required String excludeId,
-  }) async {
-    final query = '''
-[out:json][timeout:30];
-rel["boundary"="administrative"]["admin_level"="8"](${bbox.s},${bbox.w},${bbox.n},${bbox.e});
-out geom;
-''';
-    try {
-      final resp = await _dio.get(
-        ApiConstants.overpassUrl,
-        queryParameters: {'data': query},
-        options: Options(receiveTimeout: const Duration(seconds: 35)),
-      );
-      final elements = resp.data['elements'] as List<dynamic>?;
-      if (elements == null || elements.isEmpty) return [];
-      final cities = elements
-          .map((e) => _parseCity(e as Map<String, dynamic>))
-          .whereType<City>()
-          .where((c) => c.id != excludeId)
-          .toList();
-      debugPrint('[CityFog] ${cities.length} voisines trouvées dans la bbox');
-      return cities;
-    } catch (e) {
-      debugPrint('[CityFog] erreur _fetchCitiesInBbox: $e');
-      return [];
-    }
-  }
-
-  ({double s, double w, double n, double e}) _bbox(List<LatLng> polygon) {
-    var s = polygon.first.latitude;
-    var n = polygon.first.latitude;
-    var w = polygon.first.longitude;
-    var e = polygon.first.longitude;
-    for (final p in polygon) {
-      if (p.latitude  < s) s = p.latitude;
-      if (p.latitude  > n) n = p.latitude;
-      if (p.longitude < w) w = p.longitude;
-      if (p.longitude > e) e = p.longitude;
-    }
-    return (s: s, w: w, n: n, e: e);
   }
 
   City? _parseCity(Map<String, dynamic> element) {

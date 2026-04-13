@@ -45,8 +45,9 @@ class _FogPainter extends CustomPainter {
   final List<City> cities;
   final MapCamera camera;
 
-  static const _fogColor          = Color(0xBF2C2010);
-  static const _revealRadiusMeters = 50.0;
+  static const _lockedColor        = Color(0x66FF3030); // rouge semi-transparent
+  static const _revealedColor      = Color(0x6640CC60); // vert semi-transparent
+  static const _revealRadiusMeters = 120.0;
 
   _FogPainter({required this.cities, required this.camera});
 
@@ -61,23 +62,23 @@ class _FogPainter extends CustomPainter {
       final cityPath = _buildPath(city.polygon);
 
       canvas.save();
-      canvas.clipPath(cityPath); // empêche les trous de déborder chez les voisins
+      canvas.clipPath(cityPath);
 
-      // 1. Dessiner le brouillard sur cette ville
-      canvas.drawPath(cityPath, Paint()..color = _fogColor);
+      // 1. Rouge sur toute la zone verrouillée
+      canvas.drawPath(cityPath, Paint()..color = _lockedColor);
 
-      // 2. Percer des trous le long du tracé parcouru
+      // 2. Vert sur les zones parcourues (remplace le rouge, BlendMode.src)
       if (city.walkedPoints.isNotEmpty) {
-        final center    = _centroid(city.polygon);
-        final revealPx  = _metersToPixels(_revealRadiusMeters, center);
-        final blurSigma = revealPx * 0.35;
+        final center   = _centroid(city.polygon);
+        final revealPx = _metersToPixels(_revealRadiusMeters, center);
 
-        final erasePaint = Paint()
-          ..blendMode  = BlendMode.clear
-          ..maskFilter = MaskFilter.blur(BlurStyle.normal, blurSigma);
+        final greenPaint = Paint()
+          ..blendMode  = BlendMode.src
+          ..color      = _revealedColor
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, revealPx * 0.30);
 
         for (final p in city.walkedPoints) {
-          canvas.drawCircle(_toOffset(p), revealPx, erasePaint);
+          canvas.drawCircle(_toOffset(p), revealPx, greenPaint);
         }
       }
 

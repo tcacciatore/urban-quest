@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'app.dart';
 import 'data/repositories/quarter_repository.dart';
 import 'data/repositories/city_repository.dart';
+import 'data/repositories/poi_repository.dart';
 import 'services/notification_service.dart';
 
 void main() async {
@@ -10,6 +11,7 @@ void main() async {
   await NotificationService.init();
   await QuarterRepository.initHive();
   await CityRepository.initHive();
+  await PoiRepository.initHive();
   runApp(
     const ProviderScope(
       child: UrbanQuestApp(),

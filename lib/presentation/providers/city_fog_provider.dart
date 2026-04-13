@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
 import '../../data/datasources/remote/city_remote_datasource.dart';
@@ -23,8 +24,13 @@ final cityRepositoryProvider = Provider<CityRepository>(
 class CityFogState {
   final Map<String, City> cities;
   final String? currentCityId;
+  final bool isLoading;
 
-  const CityFogState({this.cities = const {}, this.currentCityId});
+  const CityFogState({
+    this.cities = const {},
+    this.currentCityId,
+    this.isLoading = false,
+  });
 
   City? get currentCity =>
       currentCityId != null ? cities[currentCityId] : null;
@@ -32,10 +38,12 @@ class CityFogState {
   CityFogState copyWith({
     Map<String, City>? cities,
     String? currentCityId,
+    bool? isLoading,
   }) =>
       CityFogState(
         cities: cities ?? this.cities,
         currentCityId: currentCityId ?? this.currentCityId,
+        isLoading: isLoading ?? this.isLoading,
       );
 }
 
@@ -81,11 +89,12 @@ class CityFogNotifier extends Notifier<CityFogState> {
     // Enregistre le point de marche dans la ville courante
     _addWalkedPoint(position);
 
-    // Si la ville + ses voisines sont déjà chargées → pas d'appel Overpass
-    if (currentId != null && state.cities.length > 1) return;
+    // Les voisines de cette ville ont déjà été chargées → pas d'appel Overpass
+    if (currentId != null && _repo.isCityLoaded(currentId)) return;
 
     if (_busy) return;
     _busy = true;
+    state = state.copyWith(isLoading: true);
     try {
       final result = await _repo.ensureCitiesLoaded(position);
       if (result.newCities.isNotEmpty) {
@@ -95,23 +104,34 @@ class CityFogNotifier extends Notifier<CityFogState> {
         }
         final newCurrentId =
             result.currentCityId ?? _cityContaining(position, updated);
-        state = state.copyWith(cities: updated, currentCityId: newCurrentId);
+        state = state.copyWith(
+          cities: updated,
+          currentCityId: newCurrentId,
+          isLoading: false,
+        );
         debugPrint('[CityFog] ${result.newCities.length} villes chargées, '
             'courante: ${state.currentCity?.name}');
       } else if (result.currentCityId != null &&
           result.currentCityId != state.currentCityId) {
-        state = state.copyWith(currentCityId: result.currentCityId);
+        state = state.copyWith(
+          currentCityId: result.currentCityId,
+          isLoading: false,
+        );
+      } else {
+        state = state.copyWith(isLoading: false);
       }
     } finally {
       _busy = false;
+      if (state.isLoading) state = state.copyWith(isLoading: false);
     }
   }
 
   // ─── Marche ───────────────────────────────────────────────────────────────
 
   static const _sampleDistanceMeters = 30.0;
-  static const _revealRadiusMeters   = 50.0;
+  static const _revealRadiusMeters   = 120.0;
   static const _gridTargetCount      = 200;
+  static const _milestones           = [0.25, 0.50, 0.75, 1.0];
 
   void _addWalkedPoint(LatLng position) {
     final cityId = state.currentCityId;
@@ -125,9 +145,10 @@ class CityFogNotifier extends Notifier<CityFogState> {
       if (dist < _sampleDistanceMeters) return;
     }
 
+    final oldRatio  = city.revealedRatio;
     final newPoints = [...city.walkedPoints, position];
-    final grid = _getOrCreateGrid(cityId, city.polygon);
-    final ratio = _computeRatio(grid, newPoints);
+    final grid      = _getOrCreateGrid(cityId, city.polygon);
+    final ratio     = _computeRatio(grid, newPoints);
 
     final updated = city.copyWith(walkedPoints: newPoints, revealedRatio: ratio);
     _repo.save(updated);
@@ -138,8 +159,26 @@ class CityFogNotifier extends Notifier<CityFogState> {
     debugPrint('[CityFog] ${city.name}: ${newPoints.length} pts, '
         '${(ratio * 100).toStringAsFixed(1)}% révélé');
 
+    _triggerMilestoneHaptic(oldRatio, ratio);
+
     if (updated.isUnlocked) {
       debugPrint('[CityFog] 🎉 ${city.name} déverrouillée !');
+    }
+  }
+
+  void _triggerMilestoneHaptic(double oldRatio, double newRatio) {
+    for (final milestone in _milestones) {
+      if (oldRatio < milestone && newRatio >= milestone) {
+        if (milestone >= 1.0) {
+          // 100% — vibration forte
+          HapticFeedback.heavyImpact();
+        } else {
+          // 25 / 50 / 75% — vibration moyenne
+          HapticFeedback.mediumImpact();
+        }
+        debugPrint('[CityFog] 🎯 palier ${(milestone * 100).round()}% atteint');
+        return; // un seul palier par point
+      }
     }
   }
 
@@ -188,6 +227,48 @@ class CityFogNotifier extends Notifier<CityFogState> {
   }
 
   // ─── API publique ─────────────────────────────────────────────────────────
+
+  /// Révèle une grande zone de brouillard autour d'un point (découverte POI).
+  void revealAroundPoint(String cityId, LatLng center, double revealRadius) {
+    final city = state.cities[cityId];
+    if (city == null) return;
+
+    const k = 111320.0;
+    final cosLat = math.cos(center.latitude * math.pi / 180);
+    // Espacement entre les points synthétiques (légèrement inférieur au rayon de révélation)
+    final step = _revealRadiusMeters * 1.6;
+    final stepDeg = step / k;
+    final stepDegLon = step / (cosLat * k);
+
+    final newPoints = <LatLng>[center];
+    final rings = (revealRadius / step).ceil();
+    for (int ring = 1; ring <= rings; ring++) {
+      final angleCount = (6 * ring).clamp(6, 24);
+      for (int i = 0; i < angleCount; i++) {
+        final angle = 2 * math.pi * i / angleCount;
+        final dlat = math.cos(angle) * ring * stepDeg;
+        final dlon = math.sin(angle) * ring * stepDegLon;
+        final p = LatLng(center.latitude + dlat, center.longitude + dlon);
+        if (_approxMeters(center, p) <= revealRadius + _revealRadiusMeters) {
+          newPoints.add(p);
+        }
+      }
+    }
+
+    final merged = [...city.walkedPoints, ...newPoints];
+    final grid = _getOrCreateGrid(cityId, city.polygon);
+    final ratio = _computeRatio(grid, merged);
+    final oldRatio = city.revealedRatio;
+
+    final updated = city.copyWith(walkedPoints: merged, revealedRatio: ratio);
+    _repo.save(updated);
+    state = state.copyWith(
+      cities: Map<String, City>.from(state.cities)..[cityId] = updated,
+    );
+
+    _triggerMilestoneHaptic(oldRatio, ratio);
+    debugPrint('[CityFog] POI reveal: ${(ratio * 100).toStringAsFixed(1)}% pour $cityId');
+  }
 
   Future<void> reset() async {
     _busy = false;

@@ -21,6 +21,8 @@ import '../../providers/city_fog_provider.dart';
 import '../../../domain/entities/city.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../widgets/fog_walk_layer.dart';
+import '../../providers/poi_providers.dart';
+import '../../widgets/poi_layer.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -33,6 +35,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     with SingleTickerProviderStateMixin {
   final MapController _mapController = MapController();
   String? _selectedCityId;
+  String? _selectedPoiId;
   late AnimationController _pulseCtrl;
   late Animation<double> _pulseAnim;
 
@@ -82,7 +85,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         .where((c) => !c.isUnlocked)
         .where((c) => _pip(latLng, c.polygon))
         .firstOrNull;
-    setState(() => _selectedCityId = hit?.id == _selectedCityId ? null : hit?.id);
+    setState(() {
+      _selectedCityId = hit?.id == _selectedCityId ? null : hit?.id;
+      _selectedPoiId = null; // désélectionne le POI sur tap carte
+    });
   }
 
   @override
@@ -95,13 +101,22 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     // City Fog — lu ici pour que HomeScreen se rebuilde quand les villes changent
     final cityFog = ref.watch(cityFogProvider);
 
+    // POIs — initialise le notifier et reconstruit la carte lors de découvertes
+    final poiState = ref.watch(poiProvider);
+
     return Scaffold(
-      drawer: const AppDrawer(),
+      drawer: AppDrawer(
+        selectedCityId: _selectedCityId,
+        onCitySelected: (cityId, center) {
+          setState(() => _selectedCityId = cityId);
+          _mapController.move(center, 14.0);
+        },
+      ),
       body: Stack(
         children: [
           // Carte plein écran
           positionAsync.when(
-            data: (position) => _buildMap(position, routeState, cityFog, _selectedCityId),
+            data: (position) => _buildMap(position, routeState, cityFog, poiState, _selectedCityId, _selectedPoiId),
             loading: () => const _MapPlaceholder(),
             error: (_, __) => const _MapPlaceholder(),
           ),
@@ -203,12 +218,20 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
               right: 20,
               child: _ErrorBanner(message: (questState as AsyncError).error.toString()),
             ),
+
+          // Bannière changement de ville
+          const Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: _CityChangeBanner(),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildMap(LatLng position, AsyncValue<RouteState?> routeState, CityFogState cityFog, String? selectedCityId) {
+  Widget _buildMap(LatLng position, AsyncValue<RouteState?> routeState, CityFogState cityFog, PoiState poiState, String? selectedCityId, String? selectedPoiId) {
     final route = routeState is AsyncData ? routeState.value : null;
     final lockedCities = cityFog.cities.values.where((c) => !c.isUnlocked).toList();
 
@@ -226,10 +249,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           userAgentPackageName: 'com.urbanquest',
           retinaMode: true,
         ),
-        // ── City Fog — brouillard percé par la marche ───────────────────────
-        FogWalkLayer(
-          cities: lockedCities.where((c) => c.id != selectedCityId).toList(),
-        ),
+        // ── City Fog — brouillard percé par la marche (toutes les villes) ──
+        FogWalkLayer(cities: lockedCities),
         // ── City Fog — ville sélectionnée (glow animé) ──────────────────────
         if (selectedCityId != null && cityFog.cities[selectedCityId] != null)
           AnimatedBuilder(
@@ -266,28 +287,39 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
             },
           ),
         MarkerLayer(
+          key: ValueKey(cityFog.cities.values
+              .fold<int>(0, (s, c) => s + c.walkedPoints.length)),
           rotate: false,
           markers: cityFog.cities.values
               .where((c) => !c.isUnlocked)
               .map((c) {
                 final center = _fogCentroid(c.polygon);
+                final pct = (c.revealedRatio * 100).round();
+                final target = (City.requiredRatio * 100).round();
                 return Marker(
                   point: center,
-                  width: 180,
-                  height: 44,
+                  width: 200,
+                  height: 72,
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Text('🔒', style: TextStyle(fontSize: 18)),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${(c.revealedRatio * 100).round()}\u202f/\u202f${(City.requiredRatio * 100).round()}% explorés',
-                        textAlign: TextAlign.center,
-                        style: GoogleFonts.dmMono(
-                          fontSize: 9,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white.withValues(alpha: 0.80),
-                          letterSpacing: 0.3,
+                      const Text('🔒', style: TextStyle(fontSize: 26)),
+                      const SizedBox(height: 4),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.45),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          '$pct\u202f/\u202f$target\u202f% explorés',
+                          textAlign: TextAlign.center,
+                          style: GoogleFonts.dmMono(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white.withValues(alpha: 0.95),
+                            letterSpacing: 0.3,
+                          ),
                         ),
                       ),
                     ],
@@ -331,6 +363,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
               ),
             ],
           ),
+        // ── POIs — au premier plan, par-dessus fog et polygones de ville ────
+        PoiLayer(
+          pois: poiState.allPois,
+          selectedPoiId: selectedPoiId,
+          onPoiTapped: (id) => setState(() => _selectedPoiId = id),
+        ),
         Consumer(builder: (context, ref, _) {
           final livePos = ref.watch(positionStreamProvider).valueOrNull ?? position;
           final heading = ref.watch(headingStreamProvider).valueOrNull ?? 0.0;
@@ -771,6 +809,130 @@ class _FullScreenPhoto extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Bannière changement de ville ─────────────────────────────────────────────
+
+class _CityChangeBanner extends ConsumerStatefulWidget {
+  const _CityChangeBanner();
+
+  @override
+  ConsumerState<_CityChangeBanner> createState() => _CityChangeBannerState();
+}
+
+class _CityChangeBannerState extends ConsumerState<_CityChangeBanner>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<Offset> _slide;
+  late final Animation<double> _fade;
+  Timer? _timer;
+  String? _cityName;
+  bool _firstBuild = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 380),
+    );
+    _slide = Tween<Offset>(begin: const Offset(0, -1), end: Offset.zero)
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
+    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _show(String name) {
+    setState(() => _cityName = name);
+    _timer?.cancel();
+    _ctrl.forward(from: 0);
+    _timer = Timer(const Duration(seconds: 3), () {
+      if (mounted) _ctrl.reverse();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    ref.listen<CityFogState>(cityFogProvider, (prev, next) {
+      if (_firstBuild) {
+        _firstBuild = false;
+        return;
+      }
+      final prevId = prev?.currentCityId;
+      final nextId = next.currentCityId;
+      if (nextId != null && nextId != prevId) {
+        final name = next.currentCity?.name ?? nextId;
+        _show(name);
+      }
+    });
+    _firstBuild = false;
+
+    if (_cityName == null) return const SizedBox.shrink();
+
+    return SlideTransition(
+      position: _slide,
+      child: FadeTransition(
+        opacity: _fade,
+        child: SafeArea(
+          bottom: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: AppColors.ink,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.ink.withValues(alpha: 0.25),
+                    blurRadius: 16,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('📍', style: TextStyle(fontSize: 20)),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Nouveau quartier',
+                          style: AppText.label.copyWith(
+                            color: AppColors.sand,
+                            letterSpacing: 0.4,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _cityName!,
+                          style: AppText.body.copyWith(
+                            color: AppColors.parchment,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );

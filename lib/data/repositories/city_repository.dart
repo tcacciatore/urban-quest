@@ -5,15 +5,23 @@ import '../../domain/entities/city.dart';
 import '../datasources/remote/city_remote_datasource.dart';
 
 class CityRepository {
-  static const _boxName = 'city_fog';
-  static const _cPrefix  = 'c_';      // données d'une ville
-  static const _loadedPrefix = 'loaded_'; // marqueur fetch-once
+  static const _boxName      = 'city_fog';
+  static const _cPrefix      = 'c_';       // données d'une ville
+  static const _loadedPrefix = 'loaded_';  // marqueur fetch-once
+  static const _schemaKey    = '__schema_version__';
+  static const _schemaVersion = 2; // à bumper si la stratégie de stockage change
 
   final CityRemoteDatasource _remote;
   CityRepository(this._remote);
 
   static Future<void> initHive() async {
-    await Hive.openBox<String>(_boxName);
+    final box = await Hive.openBox<String>(_boxName);
+    // Migration : si version absente ou périmée → on vide le cache
+    final stored = int.tryParse(box.get(_schemaKey) ?? '');
+    if (stored != _schemaVersion) {
+      await box.clear();
+      await box.put(_schemaKey, '$_schemaVersion');
+    }
   }
 
   Box<String> get _box => Hive.box<String>(_boxName);
@@ -29,6 +37,10 @@ class CityRepository {
   }
 
   // ─── Fetch-once depuis Overpass ───────────────────────────────────────────
+
+  /// Vrai si les voisines de cette ville ont déjà été chargées.
+  bool isCityLoaded(String cityId) =>
+      _box.containsKey('$_loadedPrefix$cityId');
 
   /// Charge la ville courante + voisines si pas encore en cache.
   /// Retourne les nouvelles villes ajoutées + l'ID de la ville courante.

@@ -50,7 +50,6 @@ class _QuestScreenState extends ConsumerState<QuestScreen> {
           data: (position) {
             final target = LatLng(quest.targetPlace.latitude, quest.targetPlace.longitude);
             final distance = position.distanceTo(target);
-            final direction = position.cardinalDirectionTo(target);
             final isHotMode = distance <= 50.0;
 
             final circleRadiusMeters = isHotMode
@@ -257,7 +256,7 @@ class _QuestScreenState extends ConsumerState<QuestScreen> {
                     right: 0,
                     child: _QuestInfoPanel(
                       distance: distance,
-                      direction: direction,
+                      bearing: position.bearingTo(target),
                       clues: quest.clues,
                       isHotMode: isHotMode,
                       stepCount: stepCount,
@@ -347,11 +346,6 @@ class _QuestScreenState extends ConsumerState<QuestScreen> {
 
     // ── Fog of War : révéler le quartier du point d'arrivée ─────────────────
     if (completed != null) {
-      final target = LatLng(
-        completed.targetPlace.latitude,
-        completed.targetPlace.longitude,
-      );
-      // TODO: intégrer déverrouillage ville via cityFogProvider
     }
 
     if (context.mounted) {
@@ -644,23 +638,27 @@ class _WinDialogState extends State<_WinDialog> {
 
 // ─── Panel infos ─────────────────────────────────────────────────────────────
 
-class _QuestInfoPanel extends StatelessWidget {
+class _QuestInfoPanel extends ConsumerWidget {
   final double distance;
-  final String direction;
+  final double bearing;
   final List<Clue> clues;
   final bool isHotMode;
   final int stepCount;
 
   const _QuestInfoPanel({
     required this.distance,
-    required this.direction,
+    required this.bearing,
     required this.clues,
     required this.isHotMode,
     required this.stepCount,
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final heading = ref.watch(headingStreamProvider).valueOrNull ?? 0.0;
+    // Angle relatif : bearing absolu − cap du téléphone (magnétomètre)
+    final relativeAngle = (bearing - heading) * (3.141592653589793 / 180);
+
     return Container(
       margin: const EdgeInsets.all(12),
       padding: const EdgeInsets.all(16),
@@ -682,37 +680,124 @@ class _QuestInfoPanel extends StatelessWidget {
           if (!isHotMode) ...[
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Icon(Icons.location_on, color: AppColors.terra, size: 18),
-                const SizedBox(width: 4),
-                Text(
-                  distance >= 1000
-                      ? '${(distance / 1000).toStringAsFixed(1)} km'
-                      : '${distance.toInt()} m',
-                  style: AppText.metric.copyWith(fontWeight: FontWeight.bold),
+                // Flèche directionnelle
+                _DirectionArrow(relativeAngle: relativeAngle),
+                const SizedBox(width: 20),
+                // Distance + pas
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      distance >= 1000
+                          ? '${(distance / 1000).toStringAsFixed(1)} km'
+                          : '${distance.toInt()} m',
+                      style: AppText.metric.copyWith(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.ink,
+                      ),
+                    ),
+                    Row(
+                      children: [
+                        Icon(Icons.directions_walk, color: AppColors.sand, size: 13),
+                        const SizedBox(width: 3),
+                        Text(
+                          '$stepCount pas',
+                          style: AppText.label.copyWith(letterSpacing: 0),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 16),
-                Icon(Icons.navigation, color: AppColors.forest, size: 18),
-                const SizedBox(width: 4),
-                Text(
-                  direction,
-                  style: AppText.metric.copyWith(color: AppColors.forest, fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.directions_walk, color: AppColors.sand, size: 15),
-                const SizedBox(width: 4),
-                Text('$stepCount pas', style: AppText.label.copyWith(letterSpacing: 0)),
               ],
             ),
             Divider(color: AppColors.sandLight, height: 20),
           ],
           ...clues.map((clue) => _ClueRow(clue: clue)),
         ],
+      ),
+    );
+  }
+}
+
+class _DirectionArrow extends StatefulWidget {
+  final double relativeAngle; // en radians
+
+  const _DirectionArrow({required this.relativeAngle});
+
+  @override
+  State<_DirectionArrow> createState() => _DirectionArrowState();
+}
+
+class _DirectionArrowState extends State<_DirectionArrow>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double> _anim;
+  double _currentAngle = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentAngle = widget.relativeAngle;
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 250),
+    );
+    _anim = Tween<double>(begin: _currentAngle, end: _currentAngle)
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+  }
+
+  @override
+  void didUpdateWidget(_DirectionArrow old) {
+    super.didUpdateWidget(old);
+    if ((old.relativeAngle - widget.relativeAngle).abs() < 0.005) return;
+
+    // Normalise la différence dans [-π, π] pour prendre le chemin le plus court
+    var diff = widget.relativeAngle - _anim.value;
+    while (diff > pi) { diff -= 2 * pi; }
+    while (diff < -pi) { diff += 2 * pi; }
+    final target = _anim.value + diff;
+
+    _anim = Tween<double>(begin: _anim.value, end: target)
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+    _ctrl.forward(from: 0);
+    _currentAngle = target;
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _anim,
+      builder: (_, __) => Container(
+        width: 64,
+        height: 64,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: AppColors.ink,
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.ink.withValues(alpha: 0.25),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Transform.rotate(
+          angle: _anim.value,
+          child: const Icon(
+            Icons.navigation,
+            color: AppColors.parchment,
+            size: 32,
+          ),
+        ),
       ),
     );
   }
