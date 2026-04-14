@@ -5,7 +5,7 @@ import '../../domain/entities/city_poi.dart';
 class PoiRepository {
   static const _boxName = 'city_pois';
   static const _schemaKey = '__schema_version__';
-  static const _schemaVersion = 1;
+  static const _schemaVersion = 4;
 
   static Future<void> initHive() async {
     final box = await Hive.openBox<String>(_boxName);

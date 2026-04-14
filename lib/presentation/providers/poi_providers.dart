@@ -40,7 +40,7 @@ class PoiState {
 
 class PoiNotifier extends Notifier<PoiState> {
   static const _discoveryRadiusMeters = 30.0;
-  static const _poiRevealRadiusMeters = 300.0;
+  static const _poiRevealRadiusMeters = 150.0;
 
   final Set<String> _fetching = {};
 

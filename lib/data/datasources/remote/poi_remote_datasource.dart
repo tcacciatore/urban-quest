@@ -10,8 +10,20 @@ class PoiRemoteDatasource {
   final Dio _dio;
   PoiRemoteDatasource(this._dio);
 
-  static const _poiCount = 3;
   static const _minDistanceMeters = 200.0;
+
+  /// Nombre de POIs adapté à la taille de la ville (diagonale du bbox).
+  int _poiCountForCity(List<LatLng> polygon) {
+    final bbox = _cityBbox(polygon);
+    final diagonal = _distMeters(
+      LatLng(bbox.south, bbox.west),
+      LatLng(bbox.north, bbox.east),
+    );
+    if (diagonal < 2000)  return 3;
+    if (diagonal < 5000)  return 5;
+    if (diagonal < 10000) return 8;
+    return 12;
+  }
 
   static const Map<String, String> _historicEmoji = {
     'monument':            '🗿',
@@ -77,8 +89,9 @@ class PoiRemoteDatasource {
         if (poi != null) candidates.add(poi);
       }
 
-      debugPrint('[POI] ${candidates.length} candidats pour ${city.name}');
-      return _selectDistributed(candidates, _poiCount, _minDistanceMeters);
+      final count = _poiCountForCity(city.polygon);
+      debugPrint('[POI] ${candidates.length} candidats pour ${city.name} → $count POIs');
+      return _selectDistributed(candidates, count, _minDistanceMeters);
     } catch (e) {
       debugPrint('[POI] erreur fetchPoisForCity(${city.name}): $e');
       return [];
@@ -185,7 +198,7 @@ out center tags;
     return null;
   }
 
-  /// Greedy max-min : sélectionne `count` POIs bien distribués spatialement.
+  /// Greedy max-min : sélectionne `count` POIs bien distribués dans la zone centrale.
   List<CityPoi> _selectDistributed(
       List<CityPoi> candidates, int count, double minDist) {
     if (candidates.isEmpty) return [];
@@ -195,23 +208,48 @@ out center tags;
     if (deduped.isEmpty) return [];
     if (deduped.length <= count) return deduped;
 
-    // Point initial : le plus éloigné du centroïde
+    // Centroïde de la ville (approximé depuis les candidats)
     final centerLat = deduped.map((p) => p.position.latitude).reduce((a, b) => a + b) / deduped.length;
     final centerLon = deduped.map((p) => p.position.longitude).reduce((a, b) => a + b) / deduped.length;
     final center = LatLng(centerLat, centerLon);
 
-    deduped.sort((a, b) =>
-        _distSq(b.position, center).compareTo(_distSq(a.position, center)));
+    // Rayon max (distance du candidat le plus éloigné du centroïde)
+    final maxDist = deduped
+        .map((p) => _distMeters(p.position, center))
+        .reduce((a, b) => a > b ? a : b);
 
-    final selected = <CityPoi>[deduped.first];
-    final remaining = deduped.sublist(1).toList();
+    // Ne retenir que les POIs dans la zone centrale (60 % du rayon).
+    // Si trop peu survivent, on élargit progressivement jusqu'à 100 %.
+    List<CityPoi> pool = [];
+    for (final threshold in [0.60, 0.75, 0.90, 1.0]) {
+      pool = deduped
+          .where((p) => _distMeters(p.position, center) <= maxDist * threshold)
+          .toList();
+      if (pool.length >= count) break;
+    }
+    if (pool.isEmpty) pool = deduped;
+
+    if (pool.length <= count) return pool;
+
+    // Point de départ : le POI le plus proche du centroïde
+    pool.sort((a, b) =>
+        _distMeters(a.position, center).compareTo(_distMeters(b.position, center)));
+
+    final selected = <CityPoi>[pool.first];
+    final remaining = pool.sublist(1).toList();
 
     while (selected.length < count && remaining.isNotEmpty) {
+      final usedEmojis = selected.map((p) => p.emoji).toSet();
+
+      // Priorité aux candidats avec un emoji non encore utilisé
+      final preferredPool = remaining.where((p) => !usedEmojis.contains(p.emoji)).toList();
+      final searchPool = preferredPool.isNotEmpty ? preferredPool : remaining;
+
       double bestScore = -1;
       int bestIdx = -1;
 
-      for (int i = 0; i < remaining.length; i++) {
-        final candidate = remaining[i];
+      for (int i = 0; i < searchPool.length; i++) {
+        final candidate = searchPool[i];
         double minD = double.infinity;
         for (final sel in selected) {
           final d = _distMeters(candidate.position, sel.position);
@@ -224,7 +262,9 @@ out center tags;
       }
 
       if (bestIdx == -1 || bestScore < minDist) break;
-      selected.add(remaining.removeAt(bestIdx));
+      final chosen = searchPool[bestIdx];
+      remaining.remove(chosen);
+      selected.add(chosen);
     }
 
     return selected;

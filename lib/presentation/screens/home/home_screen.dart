@@ -32,7 +32,7 @@ class HomeScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   final MapController _mapController = MapController();
   String? _selectedCityId;
   String? _selectedPoiId;
@@ -53,6 +53,28 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   void dispose() {
     _pulseCtrl.dispose();
     super.dispose();
+  }
+
+  void _animatedMove(LatLng dest, double zoom) {
+    final latTween  = Tween<double>(begin: _mapController.camera.center.latitude,  end: dest.latitude);
+    final lngTween  = Tween<double>(begin: _mapController.camera.center.longitude, end: dest.longitude);
+    final zoomTween = Tween<double>(begin: _mapController.camera.zoom,             end: zoom);
+
+    final ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
+    final anim = CurvedAnimation(parent: ctrl, curve: Curves.easeInOutCubic);
+
+    ctrl.addListener(() {
+      _mapController.move(
+        LatLng(latTween.evaluate(anim), lngTween.evaluate(anim)),
+        zoomTween.evaluate(anim),
+      );
+    });
+    ctrl.addStatusListener((status) {
+      if (status == AnimationStatus.completed || status == AnimationStatus.dismissed) {
+        ctrl.dispose();
+      }
+    });
+    ctrl.forward();
   }
 
   LatLng _fogCentroid(List<LatLng> polygon) {
@@ -109,7 +131,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         selectedCityId: _selectedCityId,
         onCitySelected: (cityId, center) {
           setState(() => _selectedCityId = cityId);
-          _mapController.move(center, 14.0);
+          _animatedMove(center, 14.0);
         },
       ),
       body: Stack(
@@ -164,7 +186,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
             child: _RecenterButton(
               onTap: () {
                 final pos = currentPosition ?? positionAsync.valueOrNull;
-                if (pos != null) _mapController.move(pos, 15.0);
+                if (pos != null) _animatedMove(pos, 15.0);
               },
             ),
           ),
@@ -831,6 +853,7 @@ class _CityChangeBannerState extends ConsumerState<_CityChangeBanner>
   late final Animation<double> _fade;
   Timer? _timer;
   String? _cityName;
+  String? _pendingCityId; // ID en attente de chargement du nom
   bool _firstBuild = true;
 
   @override
@@ -870,9 +893,26 @@ class _CityChangeBannerState extends ConsumerState<_CityChangeBanner>
       }
       final prevId = prev?.currentCityId;
       final nextId = next.currentCityId;
+
+      // Changement de ville
       if (nextId != null && nextId != prevId) {
-        final name = next.currentCity?.name ?? nextId;
-        _show(name);
+        final name = next.cities[nextId]?.name;
+        if (name != null) {
+          _pendingCityId = null;
+          _show(name);
+        } else {
+          // Nom pas encore chargé — on attend
+          _pendingCityId = nextId;
+        }
+      }
+
+      // Le nom d'une ville en attente vient d'être chargé
+      if (_pendingCityId != null) {
+        final name = next.cities[_pendingCityId!]?.name;
+        if (name != null) {
+          _pendingCityId = null;
+          _show(name);
+        }
       }
     });
     _firstBuild = false;

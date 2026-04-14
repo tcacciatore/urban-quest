@@ -21,8 +21,8 @@ class PoiLayer extends StatelessWidget {
         final isSelected = poi.id == selectedPoiId;
         return Marker(
           point: poi.position,
-          width: isSelected ? 150 : 44,
-          height: isSelected ? 68 : 40,
+          width: isSelected ? 220 : 44,
+          height: isSelected ? 84 : 40,
           alignment: Alignment.bottomCenter,
           child: _PoiMarker(
             poi: poi,
@@ -66,22 +66,20 @@ class _PoiMarker extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (poi.isDiscovered) ...[
+                  if (poi.isDiscovered)
                     const Text('✓ ', style: TextStyle(color: Color(0xFF72C23A), fontSize: 11, fontWeight: FontWeight.w800)),
-                  ],
-                  Flexible(
-                    child: Text(
-                      poi.name,
-                      style: TextStyle(
-                        color: poi.isDiscovered
-                            ? Colors.white.withValues(alpha: 0.65)
-                            : Colors.white,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                  Text(
+                    poi.name,
+                    style: TextStyle(
+                      color: poi.isDiscovered
+                          ? Colors.white.withValues(alpha: 0.65)
+                          : Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
                     ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    softWrap: true,
                   ),
                 ],
               ),
