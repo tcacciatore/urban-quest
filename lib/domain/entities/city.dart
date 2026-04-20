@@ -4,13 +4,15 @@ class City {
   final String id;
   final String name;
   final List<LatLng> polygon;
-  /// Points GPS parcourus dans cette ville (échantillonnés tous les ~30 m).
+  /// Points GPS parcourus dans cette ville (échantillonnés tous les ~8 m).
   final List<LatLng> walkedPoints;
   /// Fraction du territoire révélé (0.0 → 1.0), pré-calculée à chaque ajout.
   final double revealedRatio;
+  /// Date de la dernière marche dans cette ville.
+  final DateTime? lastVisitDate;
 
   /// Fraction requise pour déverrouiller la ville.
-  static const double requiredRatio = 0.30;
+  static const double requiredRatio = 0.75;
 
   const City({
     required this.id,
@@ -18,16 +20,25 @@ class City {
     required this.polygon,
     this.walkedPoints = const [],
     this.revealedRatio = 0.0,
+    this.lastVisitDate,
   });
 
   bool get isUnlocked => revealedRatio >= requiredRatio;
 
-  City copyWith({List<LatLng>? walkedPoints, double? revealedRatio}) => City(
+  /// Distance totale parcourue dans la ville en kilomètres.
+  double get walkedKm => walkedPoints.length * 8.0 / 1000.0;
+
+  City copyWith({
+    List<LatLng>? walkedPoints,
+    double? revealedRatio,
+    DateTime? lastVisitDate,
+  }) => City(
         id: id,
         name: name,
         polygon: polygon,
         walkedPoints: walkedPoints ?? this.walkedPoints,
         revealedRatio: revealedRatio ?? this.revealedRatio,
+        lastVisitDate: lastVisitDate ?? this.lastVisitDate,
       );
 
   Map<String, dynamic> toJson() => {
@@ -37,6 +48,7 @@ class City {
         'walkedPoints':
             walkedPoints.map((p) => [p.latitude, p.longitude]).toList(),
         'revealedRatio': revealedRatio,
+        'lastVisitDate': lastVisitDate?.toIso8601String(),
       };
 
   factory City.fromJson(Map<String, dynamic> json) => City(
@@ -55,5 +67,8 @@ class City {
                 ))
             .toList(),
         revealedRatio: (json['revealedRatio'] as num? ?? 0.0).toDouble(),
+        lastVisitDate: json['lastVisitDate'] != null
+            ? DateTime.tryParse(json['lastVisitDate'] as String)
+            : null,
       );
 }

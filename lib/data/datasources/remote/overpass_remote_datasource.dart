@@ -97,7 +97,7 @@ out 5;
 
     try {
       final response = await _dio.get(
-        ApiConstants.overpassUrl,
+        ApiConstants.overpassMirrors.first,
         queryParameters: {'data': query},
         options: Options(
           receiveTimeout: const Duration(seconds: 15),

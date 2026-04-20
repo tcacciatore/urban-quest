@@ -9,7 +9,7 @@ class CityRepository {
   static const _cPrefix      = 'c_';       // données d'une ville
   static const _loadedPrefix = 'loaded_';  // marqueur fetch-once
   static const _schemaKey    = '__schema_version__';
-  static const _schemaVersion = 2; // à bumper si la stratégie de stockage change
+  static const _schemaVersion = 4; // +lastVisitDate
 
   final CityRemoteDatasource _remote;
   CityRepository(this._remote);
@@ -59,6 +59,14 @@ class CityRepository {
     if (result.cities.isEmpty) return (newCities: <City>[], currentCityId: currentCityId);
 
     await _box.put(loadedKey, 'done');
+    // Marque aussi chaque ville du groupe comme chargée (arrondissements) :
+    // évite de re-fetcher quand l'utilisateur entre dans un autre arrondissement.
+    for (final city in result.cities) {
+      final cityLoadedKey = '$_loadedPrefix${city.id}';
+      if (!_box.containsKey(cityLoadedKey)) {
+        await _box.put(cityLoadedKey, 'done');
+      }
+    }
     final newOnes = <City>[];
     for (final city in result.cities) {
       final key = '$_cPrefix${city.id}';

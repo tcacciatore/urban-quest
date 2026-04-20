@@ -5,7 +5,7 @@ import '../../domain/entities/city_poi.dart';
 class PoiRepository {
   static const _boxName = 'city_pois';
   static const _schemaKey = '__schema_version__';
-  static const _schemaVersion = 4;
+  static const _schemaVersion = 14; // dédup Mérimée/OSM 30m, minDist 80m
 
   static Future<void> initHive() async {
     final box = await Hive.openBox<String>(_boxName);
@@ -20,7 +20,12 @@ class PoiRepository {
 
   String _cityKey(String cityId) => 'pois_$cityId';
 
-  bool hasPoisForCity(String cityId) => _box.containsKey(_cityKey(cityId));
+  /// Retourne true uniquement si la liste stockée est non vide.
+  bool hasPoisForCity(String cityId) {
+    if (!_box.containsKey(_cityKey(cityId))) return false;
+    final pois = loadForCity(cityId);
+    return pois.isNotEmpty;
+  }
 
   List<CityPoi> loadForCity(String cityId) {
     final raw = _box.get(_cityKey(cityId));
@@ -31,7 +36,9 @@ class PoiRepository {
         .toList();
   }
 
+  /// Ne sauvegarde que si la liste est non vide (évite de cacher un échec réseau).
   Future<void> savePoisForCity(String cityId, List<CityPoi> pois) async {
+    if (pois.isEmpty) return;
     await _box.put(
       _cityKey(cityId),
       jsonEncode(pois.map((p) => p.toJson()).toList()),

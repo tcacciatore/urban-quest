@@ -128,8 +128,8 @@ class CityFogNotifier extends Notifier<CityFogState> {
 
   // ─── Marche ───────────────────────────────────────────────────────────────
 
-  static const _sampleDistanceMeters = 30.0;
-  static const _revealRadiusMeters   = 120.0;
+  static const _sampleDistanceMeters = 8.0;
+  static const _revealRadiusMeters   = 2.0;
   static const _gridTargetCount      = 200;
   static const _milestones           = [0.25, 0.50, 0.75, 1.0];
 
@@ -150,7 +150,7 @@ class CityFogNotifier extends Notifier<CityFogState> {
     final grid      = _getOrCreateGrid(cityId, city.polygon);
     final ratio     = _computeRatio(grid, newPoints);
 
-    final updated = city.copyWith(walkedPoints: newPoints, revealedRatio: ratio);
+    final updated = city.copyWith(walkedPoints: newPoints, revealedRatio: ratio, lastVisitDate: DateTime.now());
     _repo.save(updated);
     state = state.copyWith(
       cities: Map<String, City>.from(state.cities)..[cityId] = updated,
@@ -269,6 +269,9 @@ class CityFogNotifier extends Notifier<CityFogState> {
     _triggerMilestoneHaptic(oldRatio, ratio);
     debugPrint('[CityFog] POI reveal: ${(ratio * 100).toStringAsFixed(1)}% pour $cityId');
   }
+
+  /// Test uniquement : simule une position GPS à cet endroit.
+  void simulatePosition(LatLng position) => _onPositionUpdate(position);
 
   Future<void> reset() async {
     _busy = false;

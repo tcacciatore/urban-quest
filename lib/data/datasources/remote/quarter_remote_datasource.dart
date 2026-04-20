@@ -64,7 +64,7 @@ out geom;
 ''';
     try {
       final response = await _dio.get(
-        ApiConstants.overpassUrl,
+        ApiConstants.overpassMirrors.first,
         queryParameters: {'data': query},
         options: Options(receiveTimeout: const Duration(seconds: 25)),
       );
@@ -103,7 +103,7 @@ out ids;
 ''';
       try {
         final resp = await _dio.get(
-          ApiConstants.overpassUrl,
+          ApiConstants.overpassMirrors.first,
           queryParameters: {'data': query},
           options: Options(receiveTimeout: const Duration(seconds: 20)),
         );
@@ -136,7 +136,7 @@ out geom;
 ''';
       try {
         final resp = await _dio.get(
-          ApiConstants.overpassUrl,
+          ApiConstants.overpassMirrors.first,
           queryParameters: {'data': query},
           options: Options(receiveTimeout: const Duration(seconds: 35)),
         );
@@ -162,7 +162,7 @@ out geom;
 ''';
     try {
       final resp = await _dio.get(
-        ApiConstants.overpassUrl,
+        ApiConstants.overpassMirrors.first,
         queryParameters: {'data': placeQuery},
         options: Options(receiveTimeout: const Duration(seconds: 35)),
       );
@@ -212,7 +212,7 @@ out geom;
 ''';
     try {
       final resp = await _dio.get(
-        ApiConstants.overpassUrl,
+        ApiConstants.overpassMirrors.first,
         queryParameters: {'data': query},
         options: Options(receiveTimeout: const Duration(seconds: 25)),
       );

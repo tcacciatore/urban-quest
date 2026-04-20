@@ -4,13 +4,11 @@ import '../../domain/entities/city_poi.dart';
 
 class PoiLayer extends StatelessWidget {
   final List<CityPoi> pois;
-  final String? selectedPoiId;
-  final ValueChanged<String?> onPoiTapped;
+  final ValueChanged<CityPoi> onPoiTapped;
 
   const PoiLayer({
     super.key,
     required this.pois,
-    required this.selectedPoiId,
     required this.onPoiTapped,
   });
 
@@ -18,16 +16,14 @@ class PoiLayer extends StatelessWidget {
   Widget build(BuildContext context) {
     return MarkerLayer(
       markers: pois.map((poi) {
-        final isSelected = poi.id == selectedPoiId;
         return Marker(
           point: poi.position,
-          width: isSelected ? 220 : 44,
-          height: isSelected ? 84 : 40,
-          alignment: Alignment.bottomCenter,
+          width: 44,
+          height: 44,
+          alignment: Alignment.center,
           child: _PoiMarker(
             poi: poi,
-            isSelected: isSelected,
-            onTap: () => onPoiTapped(isSelected ? null : poi.id),
+            onTap: () => onPoiTapped(poi),
           ),
         );
       }).toList(),
@@ -35,89 +31,54 @@ class PoiLayer extends StatelessWidget {
   }
 }
 
+// ─── Marqueur ─────────────────────────────────────────────────────────────────
+
 class _PoiMarker extends StatelessWidget {
   final CityPoi poi;
-  final bool isSelected;
   final VoidCallback onTap;
 
-  const _PoiMarker({
-    required this.poi,
-    required this.isSelected,
-    required this.onTap,
-  });
+  const _PoiMarker({required this.poi, required this.onTap});
+
+  static const _undiscoveredColors = [Color(0xFFFFD54F), Color(0xFFFFB300)];
+  static const _discoveredColors   = [Color(0xFF66BB6A), Color(0xFF388E3C)];
 
   @override
   Widget build(BuildContext context) {
-    final emojiWidget = _buildEmoji();
-
+    final colors = poi.isDiscovered ? _discoveredColors : _undiscoveredColors;
     return GestureDetector(
       onTap: onTap,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          if (isSelected) ...[
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.78),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (poi.isDiscovered)
-                    const Text('✓ ', style: TextStyle(color: Color(0xFF72C23A), fontSize: 11, fontWeight: FontWeight.w800)),
-                  Text(
-                    poi.name,
-                    style: TextStyle(
-                      color: poi.isDiscovered
-                          ? Colors.white.withValues(alpha: 0.65)
-                          : Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                    ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    softWrap: true,
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 5),
-          ],
-          emojiWidget,
-        ],
-      ),
+      child: _buildCircle(colors),
     );
   }
 
-  Widget _buildEmoji() {
-    final text = Text(
-      poi.emoji,
-      style: TextStyle(
-        fontSize: 28,
-        shadows: [
-          Shadow(
-            color: Colors.black.withValues(alpha: 0.50),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
+  Widget _buildCircle(List<Color> colors) {
+    final circle = Container(
+      width: 44,
+      height: 44,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: LinearGradient(
+          colors: colors,
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: colors.last.withValues(alpha: poi.isDiscovered ? 0.25 : 0.55),
+            blurRadius: 8,
+            offset: const Offset(0, 3),
           ),
         ],
+        border: Border.all(
+          color: Colors.white.withValues(alpha: poi.isDiscovered ? 0.4 : 0.85),
+          width: 2,
+        ),
+      ),
+      child: Center(
+        child: Text(poi.emoji, style: const TextStyle(fontSize: 22)),
       ),
     );
 
-    if (!poi.isDiscovered) return text;
-
-    // Grisé + semi-transparent pour les POIs déjà visités
-    return ColorFiltered(
-      colorFilter: const ColorFilter.matrix([
-        0.2126, 0.7152, 0.0722, 0, 0,
-        0.2126, 0.7152, 0.0722, 0, 0,
-        0.2126, 0.7152, 0.0722, 0, 0,
-        0,      0,      0,      0.50, 0,
-      ]),
-      child: text,
-    );
+    return circle;
   }
 }
