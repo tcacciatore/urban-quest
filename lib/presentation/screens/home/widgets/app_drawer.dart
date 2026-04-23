@@ -10,6 +10,9 @@ import '../../../../domain/entities/trophy.dart';
 import '../../../../theme/app_colors.dart';
 import '../../../../theme/app_text.dart';
 import '../../../providers/city_fog_provider.dart';
+import '../../../providers/poi_providers.dart';
+import '../../../providers/rainbow_provider.dart';
+import '../../../providers/claimed_missions_provider.dart';
 
 class AppDrawer extends ConsumerWidget {
   const AppDrawer({super.key});
@@ -21,7 +24,7 @@ class AppDrawer extends ConsumerWidget {
         backgroundColor: AppColors.white,
         title: Text('Réinitialiser ?', style: AppText.sectionTitle.copyWith(fontSize: 20)),
         content: Text(
-          'Trophées, historique et brouillard de guerre seront effacés.',
+          'Trophées, historique, brouillard de guerre, lieux visités, arc-en-ciel et quêtes seront effacés.',
           style: AppText.body.copyWith(color: AppColors.sand),
         ),
         actions: [
@@ -34,6 +37,9 @@ class AppDrawer extends ConsumerWidget {
               await ref.read(trophyProvider.notifier).reset();
               await ref.read(questHistoryProvider.notifier).reset();
               await ref.read(cityFogProvider.notifier).reset();
+              await ref.read(poiProvider.notifier).reset();
+              await ref.read(rainbowProvider.notifier).reset();
+              await ref.read(claimedMissionsProvider.notifier).reset();
               if (ctx.mounted) Navigator.of(ctx).pop();
             },
             child: Text('Réinitialiser', style: TextStyle(color: AppColors.terra)),

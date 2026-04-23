@@ -22,83 +22,88 @@ class QuestSheet extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final missions = ref.watch(missionsProvider);
 
-    return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.88,
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Handle
-          Padding(
-            padding: const EdgeInsets.only(top: 12, bottom: 4),
-            child: Container(
-              width: 36,
-              height: 4,
-              decoration: BoxDecoration(
-                color: const Color(0xFFDDE4ED),
-                borderRadius: BorderRadius.circular(2),
+      child: Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Handle
+            Padding(
+              padding: const EdgeInsets.only(top: 12, bottom: 4),
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFDDE4ED),
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
             ),
-          ),
 
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
-            child: Row(
-              children: [
-                const Text('Quêtes', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Color(0xFF1A2840))),
-                const Spacer(),
-                // Bouton lancer une chasse
-                GestureDetector(
-                  onTap: () {
-                    Navigator.of(context).pop();
-                    onStartHunt?.call();
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFFFFB800), Color(0xFFFF8C00)],
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+              child: Row(
+                children: [
+                  const Text('Quêtes', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Color(0xFF1A2840))),
+                  const Spacer(),
+                  // Bouton lancer une chasse
+                  GestureDetector(
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      onStartHunt?.call();
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFFFFB800), Color(0xFFFF8C00)],
+                        ),
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFFFFB800).withValues(alpha: 0.4),
+                            blurRadius: 8,
+                            offset: const Offset(0, 3),
+                          ),
+                        ],
                       ),
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: const Color(0xFFFFB800).withValues(alpha: 0.4),
-                          blurRadius: 8,
-                          offset: const Offset(0, 3),
-                        ),
-                      ],
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text('⭐', style: TextStyle(fontSize: 14)),
-                        SizedBox(width: 5),
-                        Text(
-                          'Lancer',
-                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white),
-                        ),
-                      ],
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('⭐', style: TextStyle(fontSize: 14)),
+                          SizedBox(width: 5),
+                          Text(
+                            'Lancer',
+                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
 
-          const SizedBox(height: 12),
+            const SizedBox(height: 12),
 
-          // Liste des missions
-          ListView.separated(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-            itemCount: missions.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 10),
-            itemBuilder: (_, i) => _MissionTile(mission: missions[i]),
-          ),
-        ],
+            // Liste des missions — scrollable
+            Flexible(
+              child: ListView.separated(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                itemCount: missions.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 10),
+                itemBuilder: (_, i) => _MissionTile(mission: missions[i]),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -175,6 +180,17 @@ class _MissionTile extends ConsumerWidget {
                     ),
                   ),
                   const SizedBox(height: 2),
+                  Text(
+                    mission.subtitle,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: isClaimed
+                          ? const Color(0xFFB0C4D8)
+                          : const Color(0xFF5A7A99),
+                      height: 1.3,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
                   Text(
                     '${mission.current} / ${mission.target}',
                     style: const TextStyle(fontSize: 12, color: Color(0xFF8FA8C0), fontWeight: FontWeight.w500),
@@ -447,7 +463,7 @@ class _CityProgressCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final isUnlocked = city.isUnlocked;
     final ratio      = (city.revealedRatio / City.requiredRatio).clamp(0.0, 1.0);
-    final percent    = (city.revealedRatio * 100).round();
+    final percent    = (city.revealedRatio * 100).toStringAsFixed(1).replaceAll('.', ',');
 
     ref.watch(cityRewardsProvider);
     final rewardClaimed = ref.read(cityRewardsProvider.notifier).isClaimed(city.id);
@@ -492,7 +508,7 @@ class _CityProgressCard extends ConsumerWidget {
                     ),
                   ),
                 ),
-                if (percent >= 100)
+                if (isUnlocked)
                   const Text('✅', style: TextStyle(fontSize: 16))
                 else
                   Text(

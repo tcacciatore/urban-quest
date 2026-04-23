@@ -108,7 +108,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   void _onMapTap(LatLng latLng, CityFogState cityFog) {
     final hit = cityFog.cities.values
-        .where((c) => !c.isUnlocked)
         .where((c) => _pip(latLng, c.polygon))
         .firstOrNull;
     setState(() {
@@ -280,7 +279,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
             child: tileWidget,
           ),
         ),
-        // ── Ville sélectionnée (glow animé) — en dessous du brouillard ────
+        // ── City Fog — trainée colorée au premier plan ──────────────────────
+        FogWalkLayer(
+          cities: lockedCities,
+          completedRainbow: ref.watch(rainbowProvider),
+        ),
+        // ── Ville sélectionnée (glow animé) — au-dessus du brouillard ────────
+        // Fill transparent pour ne pas masquer la trainée colorée en dessous.
         if (selectedCityId != null && cityFog.cities[selectedCityId] != null)
           AnimatedBuilder(
             animation: _pulseAnim,
@@ -290,38 +295,36 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
               return PolygonLayer(
                 simplificationTolerance: 0,
                 polygons: [
-                  Polygon(
-                    points: polygon,
-                    color: Color.fromRGBO(200, 168, 130, 0.08 + 0.10 * t),
-                    borderColor: Color.fromRGBO(200, 168, 130, 0.15 + 0.20 * t),
-                    borderStrokeWidth: 18 + 8 * t,
-                  ),
+                  // Halo large pulsant
                   Polygon(
                     points: polygon,
                     color: Colors.transparent,
-                    borderColor: Color.fromRGBO(200, 168, 130, 0.35 + 0.25 * t),
-                    borderStrokeWidth: 7,
+                    borderColor: Color.fromRGBO(180, 220, 255, 0.15 + 0.25 * t),
+                    borderStrokeWidth: 22 + 10 * t,
                   ),
+                  // Halo moyen
                   Polygon(
                     points: polygon,
-                    color: Color.fromRGBO(80, 48, 20, 0.75 + 0.10 * t),
-                    borderColor: Color.fromRGBO(200, 168, 130, 0.85 + 0.15 * t),
-                    borderStrokeWidth: 2.5,
+                    color: Colors.transparent,
+                    borderColor: Color.fromRGBO(200, 235, 255, 0.55 + 0.25 * t),
+                    borderStrokeWidth: 6,
+                  ),
+                  // Contour net
+                  Polygon(
+                    points: polygon,
+                    color: Colors.transparent,
+                    borderColor: Color.fromRGBO(255, 255, 255, 0.92 + 0.08 * t),
+                    borderStrokeWidth: 2.0,
                   ),
                 ],
               );
             },
           ),
-        // ── City Fog — trainée colorée au premier plan ──────────────────────
-        FogWalkLayer(
-          cities: lockedCities,
-          completedRainbow: ref.watch(rainbowProvider),
-        ),
         // ── Contours : ville courante + arrondissements déjà visités ────────
         PolygonLayer(
           simplificationTolerance: 0,
           polygons: cityFog.cities.values
-              .where((c) => c.walkedPoints.isNotEmpty || c.id == cityFog.currentCityId)
+              .where((c) => c.lastVisitDate != null || c.id == cityFog.currentCityId)
               .map((c) => Polygon(
                 points: c.polygon,
                 color: Colors.transparent,
@@ -396,7 +399,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
             final city = cityFog.cities[poi.cityId];
             if (city == null) return false;
             return poi.cityId == cityFog.currentCityId ||
-                city.walkedPoints.isNotEmpty;
+                city.lastVisitDate != null;
           }).toList(),
           onPoiTapped: (poi) => Navigator.of(context).push(
             MaterialPageRoute(
@@ -1045,7 +1048,7 @@ class _CityChangeBannerState extends ConsumerState<_CityChangeBanner>
     setState(() => _cityName = name);
     _timer?.cancel();
     _ctrl.forward(from: 0);
-    _timer = Timer(const Duration(seconds: 3), () {
+    _timer = Timer(const Duration(seconds: 4), () {
       if (mounted) _ctrl.reverse();
     });
   }
@@ -1117,7 +1120,7 @@ class _CityChangeBannerState extends ConsumerState<_CityChangeBanner>
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          'Nouveau quartier',
+                          'Ville actuelle',
                           style: AppText.label.copyWith(
                             color: AppColors.sand,
                             letterSpacing: 0.4,
@@ -1233,6 +1236,15 @@ class _CityLockMarker extends StatelessWidget {
                         backgroundColor: Colors.white.withValues(alpha: 0.4),
                         valueColor: const AlwaysStoppedAnimation(Color(0xFFFFB300)),
                       ),
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    '${(progress * 100).toStringAsFixed(1).replaceAll('.', ',')} %',
+                    style: const TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF5A6A82),
                     ),
                   ),
                 ],

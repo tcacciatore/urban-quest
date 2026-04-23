@@ -9,7 +9,7 @@ class CityRepository {
   static const _cPrefix      = 'c_';       // données d'une ville
   static const _loadedPrefix = 'loaded_';  // marqueur fetch-once
   static const _schemaKey    = '__schema_version__';
-  static const _schemaVersion = 4; // +lastVisitDate
+  static const _schemaVersion = 5; // +ratioRadiusMeters 25m (recalcul revealedRatio)
 
   final CityRemoteDatasource _remote;
   CityRepository(this._remote);

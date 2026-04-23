@@ -8,6 +8,7 @@ import '../../data/repositories/city_repository.dart';
 import '../../domain/entities/city.dart';
 import 'location_providers.dart';
 import 'quest_providers.dart'; // pour dioProvider
+import '../../utils/shape_detection.dart' as shapes;
 
 // ─── Infrastructure ───────────────────────────────────────────────────────────
 
@@ -53,6 +54,8 @@ class CityFogNotifier extends Notifier<CityFogState> {
   bool _busy = false;
   /// Grille de points d'échantillonnage par ville (calculée une fois en mémoire).
   final Map<String, List<LatLng>> _gridCache = {};
+  /// Formes déjà révélées cette session pour éviter les doublons (cityId:shapeType).
+  final Set<String> _shapesRevealed = {};
 
   @override
   CityFogState build() {
@@ -129,7 +132,8 @@ class CityFogNotifier extends Notifier<CityFogState> {
   // ─── Marche ───────────────────────────────────────────────────────────────
 
   static const _sampleDistanceMeters = 8.0;
-  static const _revealRadiusMeters   = 2.0;
+  static const _revealRadiusMeters   = 2.0;   // espacement des points synthétiques (revealAroundPoint)
+  static const _ratioRadiusMeters    = 25.0;  // rayon de couverture pour revealedRatio (= rayon visuel)
   static const _gridTargetCount      = 200;
   static const _milestones           = [0.25, 0.50, 0.75, 1.0];
 
@@ -164,6 +168,73 @@ class CityFogNotifier extends Notifier<CityFogState> {
     if (updated.isUnlocked) {
       debugPrint('[CityFog] 🎉 ${city.name} déverrouillée !');
     }
+
+    _checkShapeReveal(cityId, newPoints);
+  }
+
+  // ─── Révélation de l'intérieur d'une forme ────────────────────────────────
+
+  void _checkShapeReveal(String cityId, List<LatLng> walkedPoints) {
+    final seg = shapes.lastContinuousSegment(walkedPoints);
+    final polygon = shapes.detectedShapePolygon(seg);
+    if (polygon == null) return;
+
+    // Identifie la forme par son nombre de sommets + position de départ
+    final shapeKey = '$cityId:${polygon.length}:'
+        '${seg.first.latitude.toStringAsFixed(3)}:'
+        '${seg.first.longitude.toStringAsFixed(3)}';
+    if (_shapesRevealed.contains(shapeKey)) return;
+    _shapesRevealed.add(shapeKey);
+
+    _revealPolygonInterior(cityId, polygon);
+  }
+
+  void _revealPolygonInterior(String cityId, List<LatLng> polygon) {
+    final city = state.cities[cityId];
+    if (city == null) return;
+
+    // Bounding box du polygone
+    double minLat = polygon.first.latitude, maxLat = polygon.first.latitude;
+    double minLon = polygon.first.longitude, maxLon = polygon.first.longitude;
+    for (final p in polygon) {
+      if (p.latitude  < minLat) minLat = p.latitude;
+      if (p.latitude  > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLon) minLon = p.longitude;
+      if (p.longitude > maxLon) maxLon = p.longitude;
+    }
+
+    // Grille ~25 m à l'intérieur du polygone
+    const spacing = 25.0;
+    const k = 111320.0;
+    final latStep = spacing / k;
+    final cosLat = math.cos((minLat + maxLat) / 2 * math.pi / 180);
+    final lonStep = spacing / (cosLat * k);
+
+    final newPoints = <LatLng>[];
+    for (double lat = minLat; lat <= maxLat + latStep; lat += latStep) {
+      for (double lon = minLon; lon <= maxLon + lonStep; lon += lonStep) {
+        final p = LatLng(lat, lon);
+        if (_pip(p, polygon)) newPoints.add(p);
+      }
+    }
+
+    if (newPoints.isEmpty) return;
+
+    // Injecte au début (comme revealAroundPoint) pour ne pas rompre le tracé GPS
+    final merged = [...newPoints, ...city.walkedPoints];
+    final grid  = _getOrCreateGrid(cityId, city.polygon);
+    final ratio = _computeRatio(grid, merged);
+    final oldRatio = city.revealedRatio;
+
+    final updated = city.copyWith(walkedPoints: merged, revealedRatio: ratio);
+    _repo.save(updated);
+    state = state.copyWith(
+      cities: Map<String, City>.from(state.cities)..[cityId] = updated,
+    );
+
+    _triggerMilestoneHaptic(oldRatio, ratio);
+    debugPrint('[CityFog] 🔷 Intérieur révélé : ${newPoints.length} pts pour $cityId '
+        '(${(ratio * 100).toStringAsFixed(1)}%)');
   }
 
   void _triggerMilestoneHaptic(double oldRatio, double newRatio) {
@@ -210,10 +281,10 @@ class CityFogNotifier extends Notifier<CityFogState> {
     return grid;
   }
 
-  /// Fraction des points de grille couverts par au moins un cercle de 50 m.
+  /// Fraction des points de grille couverts par au moins un point marché (rayon 25 m).
   double _computeRatio(List<LatLng> grid, List<LatLng> walkedPoints) {
     if (grid.isEmpty) return 0.0;
-    const rSq = _revealRadiusMeters * _revealRadiusMeters;
+    const rSq = _ratioRadiusMeters * _ratioRadiusMeters;
     int covered = 0;
     for (final gp in grid) {
       for (final wp in walkedPoints) {
@@ -227,6 +298,30 @@ class CityFogNotifier extends Notifier<CityFogState> {
   }
 
   // ─── API publique ─────────────────────────────────────────────────────────
+
+  /// Révèle entièrement une ville (achat avec crédits) — ratio forcé à 1.0.
+  Future<void> revealCityFully(String cityId) async {
+    final city = state.cities[cityId];
+    if (city == null) return;
+
+    final grid = _getOrCreateGrid(cityId, city.polygon);
+    // On utilise les points de grille eux-mêmes comme walkedPoints pour couvrir 100 %
+    final merged = [...grid, ...city.walkedPoints];
+    final oldRatio = city.revealedRatio;
+
+    final updated = city.copyWith(
+      walkedPoints: merged,
+      revealedRatio: 1.0,
+      lastVisitDate: DateTime.now(),
+    );
+    await _repo.save(updated);
+    state = state.copyWith(
+      cities: Map<String, City>.from(state.cities)..[cityId] = updated,
+    );
+
+    _triggerMilestoneHaptic(oldRatio, 1.0);
+    debugPrint('[CityFog] 🔓 $cityId révélée à 100 % par achat');
+  }
 
   /// Révèle une grande zone de brouillard autour d'un point (découverte POI).
   void revealAroundPoint(String cityId, LatLng center, double revealRadius) {
@@ -255,7 +350,9 @@ class CityFogNotifier extends Notifier<CityFogState> {
       }
     }
 
-    final merged = [...city.walkedPoints, ...newPoints];
+    // Les points synthétiques sont insérés au DÉBUT pour ne pas rompre
+    // la continuité du tracé GPS (qui est détectée depuis la fin de la liste).
+    final merged = [...newPoints, ...city.walkedPoints];
     final grid = _getOrCreateGrid(cityId, city.polygon);
     final ratio = _computeRatio(grid, merged);
     final oldRatio = city.revealedRatio;
@@ -276,6 +373,7 @@ class CityFogNotifier extends Notifier<CityFogState> {
   Future<void> reset() async {
     _busy = false;
     _gridCache.clear();
+    _shapesRevealed.clear();
     await _repo.clearAll();
     state = const CityFogState();
     final pos = ref.read(positionStreamProvider).valueOrNull ??

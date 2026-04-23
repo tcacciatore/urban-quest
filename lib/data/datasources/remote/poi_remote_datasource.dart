@@ -53,6 +53,7 @@ class PoiRemoteDatasource {
     'cinema':   '🎬',
     'library':  '📚',
     'clock':    '🕰️',
+    'townhall': '🏛️',
   };
 
   static const Map<String, String> _naturalEmoji = {
@@ -134,35 +135,54 @@ class PoiRemoteDatasource {
 
     // ── 1. Parse les candidats bruts ──────────────────────────────────────────
     // Stocke (poi, tags) pour la recherche Wikipedia multi-méthodes.
-    final rawCandidates = <(CityPoi, Map<String, dynamic>)>[];
+    // Sépare les mairies (toujours incluses) des autres POIs.
+    final mairieCandidates = <(CityPoi, Map<String, dynamic>)>[];
+    final otherCandidates  = <(CityPoi, Map<String, dynamic>)>[];
     for (final el in elements) {
       final parsed = _parsePoi(el as Map<String, dynamic>, city.id, city.polygon);
-      if (parsed != null) rawCandidates.add(parsed);
+      if (parsed == null) continue;
+      final (_, tags) = parsed;
+      if ((tags['amenity'] as String?) == 'townhall') {
+        mairieCandidates.add(parsed);
+      } else {
+        otherCandidates.add(parsed);
+      }
     }
-    debugPrint('[POI] ${rawCandidates.length} candidats bruts pour ${city.name}');
+    debugPrint('[POI] ${mairieCandidates.length} mairie(s) + ${otherCandidates.length} autres pour ${city.name}');
 
-    // ── 2. Enrichissement Wikipedia optionnel (par lots de 6) ────────────────
-    final enriched = <CityPoi>[];
-    const batchSize = 6;
-    for (int i = 0; i < rawCandidates.length; i += batchSize) {
-      final batch = rawCandidates.skip(i).take(batchSize).toList();
-      final results = await Future.wait(
-        batch.map((r) async {
-          final (poi, tags) = r;
-          final desc = await _fetchWikipediaInfo(tags, poi.name);
-          return desc != null && desc.isNotEmpty
-              ? poi.copyWith(description: desc)
-              : poi;
-        }),
-      );
-      enriched.addAll(results);
+    // ── 2. Enrichissement Wikipedia (par lots de 6) ───────────────────────────
+    Future<List<CityPoi>> enrich(List<(CityPoi, Map<String, dynamic>)> candidates) async {
+      const batchSize = 6;
+      final result = <CityPoi>[];
+      for (int i = 0; i < candidates.length; i += batchSize) {
+        final batch = candidates.skip(i).take(batchSize).toList();
+        final results = await Future.wait(
+          batch.map((r) async {
+            final (poi, tags) = r;
+            final desc = await _fetchWikipediaInfo(tags, poi.name);
+            return desc != null && desc.isNotEmpty
+                ? poi.copyWith(description: desc)
+                : poi;
+          }),
+        );
+        result.addAll(results);
+      }
+      return result;
     }
+
+    // Mairies enrichies séparément (pas soumises à _selectDistributed)
+    final enrichedMairies = await enrich(mairieCandidates);
+    final enrichedOthers  = await enrich(otherCandidates);
 
     final count = _poiCountForCity(city.polygon);
-    final withDesc = enriched.where((p) => p.description != null).length;
-    debugPrint('[POI] Overpass: ${enriched.length} POIs ($withDesc avec desc) → sélection de $count pour ${city.name}');
+    final withDesc = enrichedOthers.where((p) => p.description != null).length;
+    debugPrint('[POI] Overpass: ${enrichedOthers.length} POIs ($withDesc avec desc) → sélection de $count + ${enrichedMairies.length} mairie(s)');
 
-    return _selectDistributed(enriched, count, _minDistanceMeters);
+    // Mairies toujours incluses ; autres POIs sélectionnés de façon distribuée.
+    return [
+      ...enrichedMairies,
+      ..._selectDistributed(enrichedOthers, count, _minDistanceMeters),
+    ];
   }
 
   // ─── Wikipedia ────────────────────────────────────────────────────────────────
@@ -342,11 +362,13 @@ class PoiRemoteDatasource {
   node["tourism"~"artwork|viewpoint|attraction"]($b);
   node["amenity"~"fountain|theatre|cinema|library|clock"]($b);
   node["amenity"="place_of_worship"]($b);
+  node["amenity"="townhall"]["name"]($b);
   node["natural"~"peak|tree|spring|cave_entrance"]["name"]($b);
   node["leisure"~"garden|nature_reserve"]["name"]($b);
   way["historic"~"monument|memorial|castle|ruins|archaeological_site|fort|city_gate"]($b);
   way["tourism"~"artwork|viewpoint|attraction"]($b);
   way["amenity"="place_of_worship"]($b);
+  way["amenity"="townhall"]["name"]($b);
   way["leisure"~"garden|nature_reserve"]["name"]($b);
 );
 out center tags;

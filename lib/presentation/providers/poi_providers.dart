@@ -56,20 +56,22 @@ class PoiNotifier extends Notifier<PoiState> {
     final cityFog = ref.read(cityFogProvider);
     final initial = <String, List<CityPoi>>{};
 
-    // Charge le cache et planifie les fetches pour les villes sans cache.
-    // On utilise Future.microtask pour ne pas appeler _drainQueue pendant build().
-    for (final cityId in cityFog.cities.keys) {
-      if (repo.hasPoisForCity(cityId)) {
-        initial[cityId] = repo.loadForCity(cityId);
+    // Charge le cache et planifie les fetches UNIQUEMENT pour les villes visitées
+    // ou la ville courante (évite de fetcher tous les arrondissements voisins).
+    for (final city in cityFog.cities.values) {
+      if (!_shouldFetch(city, cityFog.currentCityId)) continue;
+      if (repo.hasPoisForCity(city.id)) {
+        initial[city.id] = repo.loadForCity(city.id);
       } else {
-        _queue.add(cityId);
+        _queue.add(city.id);
       }
     }
     if (_queue.isNotEmpty) Future.microtask(_drainQueue);
 
-    // Écoute les NOUVELLES villes qui apparaissent après le build
+    // Écoute les mises à jour : fetch uniquement si la ville est visitée/courante
     ref.listen<CityFogState>(cityFogProvider, (_, next) {
       for (final city in next.cities.values) {
+        if (!_shouldFetch(city, next.currentCityId)) continue;
         if (!state.poisByCity.containsKey(city.id) &&
             !_fetching.contains(city.id) &&
             !_queue.contains(city.id)) {
@@ -228,6 +230,44 @@ class PoiNotifier extends Notifier<PoiState> {
     _checkDiscovery(position);
   }
 
+  /// Marque tous les POIs d'une ville comme découverts (achat avec crédits).
+  Future<void> discoverAllForCity(String cityId) async {
+    final pois = List<CityPoi>.from(state.poisByCity[cityId] ?? []);
+    if (pois.isEmpty) return;
+
+    final now = DateTime.now();
+    final updated = pois.map((p) => p.isDiscovered
+        ? p
+        : CityPoi(
+            id: p.id,
+            cityId: p.cityId,
+            name: p.name,
+            emoji: p.emoji,
+            position: p.position,
+            description: p.description,
+            isDiscovered: true,
+            firstVisitDate: now,
+            visitCount: 1,
+          )).toList();
+
+    await _repo.savePoisForCity(cityId, updated);
+    state = state.copyWith(
+      poisByCity: Map.from(state.poisByCity)..[cityId] = updated,
+    );
+    debugPrint('[POI] 🔓 ${updated.length} POIs découverts pour $cityId');
+  }
+
+  Future<void> reset() async {
+    await _repo.clearDiscoveries();
+    // Recharge les POIs (toujours en cache, mais sans découvertes)
+    final updated = <String, List<CityPoi>>{};
+    for (final cityId in state.poisByCity.keys) {
+      updated[cityId] = _repo.loadForCity(cityId);
+    }
+    state = PoiState(poisByCity: updated);
+    _revisitedThisSession.clear();
+  }
+
   void _checkDiscoveryWithLastPosition() {
     final pos = _lastKnownPosition ??
         ref.read(positionStreamProvider).valueOrNull ??
@@ -276,6 +316,9 @@ class PoiNotifier extends Notifier<PoiState> {
     await _repo.savePoisForCity(poi.cityId, cityPois);
     HapticFeedback.mediumImpact();
   }
+
+  bool _shouldFetch(City city, String? currentCityId) =>
+      city.id == currentCityId || city.lastVisitDate != null;
 
   double _distMeters(LatLng a, LatLng b) {
     const k = 111320.0;

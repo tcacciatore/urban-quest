@@ -21,6 +21,7 @@ class PoiDetailScreen extends StatelessWidget {
         ),
       ),
       body: SingleChildScrollView(
+        physics: const ClampingScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(24, 0, 24, 40),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -219,48 +220,36 @@ class _EmojiBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Widget badge = Container(
+    return Container(
       width: 100,
       height: 100,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         gradient: LinearGradient(
           colors: poi.isDiscovered
-              ? [const Color(0xFFB0BEC5), const Color(0xFF90A4AE)]
-              : [const Color(0xFFFFD54F), const Color(0xFFFFB300)],
+              ? [const Color(0xFF6EC6F5), const Color(0xFF3A8EE6)]
+              : [const Color(0xFF8A9AB8), const Color(0xFF5A6A82)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         boxShadow: [
           BoxShadow(
             color: (poi.isDiscovered
-                    ? const Color(0xFF90A4AE)
-                    : const Color(0xFFFFB300))
-                .withValues(alpha: poi.isDiscovered ? 0.25 : 0.55),
+                    ? const Color(0xFF3A8EE6)
+                    : const Color(0xFF5A6A82))
+                .withValues(alpha: poi.isDiscovered ? 0.45 : 0.20),
             blurRadius: 24,
             offset: const Offset(0, 8),
           ),
         ],
         border: Border.all(
-          color: Colors.white.withValues(alpha: poi.isDiscovered ? 0.4 : 0.85),
+          color: Colors.white.withValues(alpha: poi.isDiscovered ? 0.7 : 0.3),
           width: 3,
         ),
       ),
       child: Center(
         child: Text(poi.emoji, style: const TextStyle(fontSize: 48)),
       ),
-    );
-
-    if (!poi.isDiscovered) return badge;
-
-    return ColorFiltered(
-      colorFilter: const ColorFilter.matrix([
-        0.2126, 0.7152, 0.0722, 0, 0,
-        0.2126, 0.7152, 0.0722, 0, 0,
-        0.2126, 0.7152, 0.0722, 0, 0,
-        0,      0,      0,      0.55, 0,
-      ]),
-      child: badge,
     );
   }
 }

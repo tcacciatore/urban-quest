@@ -52,4 +52,29 @@ class PoiRepository {
         .toList();
     await savePoisForCity(poi.cityId, updated);
   }
+
+  /// Réinitialise les découvertes sur tous les POIs (isDiscovered, firstVisitDate, visitCount)
+  /// sans supprimer la liste des lieux (évite un re-fetch réseau).
+  Future<void> clearDiscoveries() async {
+    for (final key in _box.keys.toList()) {
+      if (key == _schemaKey) continue;
+      final cityId = (key as String).replaceFirst('pois_', '');
+      final pois = loadForCity(cityId);
+      if (pois.isEmpty) continue;
+      final cleared = pois
+          .map((p) => CityPoi(
+                id: p.id,
+                cityId: p.cityId,
+                name: p.name,
+                emoji: p.emoji,
+                position: p.position,
+                description: p.description,
+                isDiscovered: false,
+                firstVisitDate: null,
+                visitCount: 0,
+              ))
+          .toList();
+      await _box.put(key, jsonEncode(cleared.map((p) => p.toJson()).toList()));
+    }
+  }
 }

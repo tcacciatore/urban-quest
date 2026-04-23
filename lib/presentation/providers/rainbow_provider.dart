@@ -12,6 +12,9 @@ class RainbowNotifier extends Notifier<List<LatLng>> {
   static const _sampleMeters  = 8.0;   // distance entre deux points
   static const _targetMeters  = 1000.0;
 
+  /// Date à laquelle l'arc-en-ciel a été accompli (en mémoire).
+  String? _completedDate;
+
   @override
   List<LatLng> build() {
     ref.listen<CityFogState>(cityFogProvider, (_, fog) => _checkRainbow(fog));
@@ -35,6 +38,7 @@ class RainbowNotifier extends Notifier<List<LatLng>> {
         final pair = p as List;
         return LatLng((pair[0] as num).toDouble(), (pair[1] as num).toDouble());
       }).toList();
+      _completedDate = map['date'] as String;
       state = pts;
     } catch (_) {
       await prefs.remove(_prefsKey);
@@ -52,6 +56,11 @@ class RainbowNotifier extends Notifier<List<LatLng>> {
   // ── Détection ────────────────────────────────────────────────────────────────
 
   void _checkRainbow(CityFogState fog) {
+    // Réinitialise si on a passé minuit sans redémarrer l'app
+    if (state.isNotEmpty && _completedDate != _today()) {
+      state = [];
+      _completedDate = null;
+    }
     if (state.isNotEmpty) return; // déjà accompli aujourd'hui
 
     const distCalc = Distance();
@@ -76,9 +85,17 @@ class RainbowNotifier extends Notifier<List<LatLng>> {
     }
 
     if (best.isNotEmpty) {
+      _completedDate = _today();
       state = best;
       _save(best);
     }
+  }
+
+  Future<void> reset() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_prefsKey);
+    _completedDate = null;
+    state = [];
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────────

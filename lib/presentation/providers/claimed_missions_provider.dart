@@ -59,6 +59,12 @@ class ClaimedMissionsNotifier extends Notifier<Map<String, _ClaimRecord>> {
     await _save();
   }
 
+  Future<void> reset() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_prefsKey);
+    state = {};
+  }
+
   String _today() {
     final now = DateTime.now();
     return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';

@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../domain/entities/city.dart';
 import '../../../domain/entities/city_poi.dart';
+import '../../providers/city_fog_provider.dart';
 import '../../providers/poi_providers.dart';
+import '../../providers/wallet_providers.dart';
 
 class CityDetailScreen extends ConsumerStatefulWidget {
   final City city;
@@ -41,7 +43,10 @@ class _CityDetailScreenState extends ConsumerState<CityDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final city = widget.city;
+    // Ville live (se met à jour si déverrouillée)
+    final city = ref.watch(
+      cityFogProvider.select((s) => s.cities[widget.city.id] ?? widget.city),
+    );
     final pois = ref.watch(
       poiProvider.select((s) => s.forCity(city.id)),
     );
@@ -106,6 +111,11 @@ class _CityDetailScreenState extends ConsumerState<CityDetailScreen> {
                 const SizedBox(height: 20),
                 // ── Stats : km + dernière visite ─────────────────────────────
                 Center(child: _StatsRow(city: city)),
+                // ── Bouton déverrouiller ──────────────────────────────────────
+                if (!city.isUnlocked) ...[
+                  const SizedBox(height: 20),
+                  _UnlockButton(city: city),
+                ],
                 // ── POIs ─────────────────────────────────────────────────────
                 if (pois.isNotEmpty) ...[
                   const SizedBox(height: 32),
@@ -358,6 +368,178 @@ class _StatChip extends StatelessWidget {
               color: Colors.white.withValues(alpha: 0.85),
               fontSize: 13,
               fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Bouton déverrouiller avec crédits ───────────────────────────────────────
+
+class _UnlockButton extends ConsumerWidget {
+  final City city;
+  static const _cost = 3000;
+
+  const _UnlockButton({required this.city});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final wallet = ref.watch(walletProvider);
+    final canAfford = wallet.credits >= _cost;
+
+    return GestureDetector(
+      onTap: () => _showConfirmDialog(context, ref, canAfford),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        decoration: BoxDecoration(
+          gradient: canAfford
+              ? const LinearGradient(
+                  colors: [Color(0xFFFFB800), Color(0xFFFF8C00)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                )
+              : null,
+          color: canAfford ? null : Colors.white.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(16),
+          border: canAfford
+              ? null
+              : Border.all(color: Colors.white.withValues(alpha: 0.12)),
+          boxShadow: canAfford
+              ? [
+                  BoxShadow(
+                    color: const Color(0xFFFFB800).withValues(alpha: 0.35),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ]
+              : null,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              '🔓',
+              style: TextStyle(
+                fontSize: 18,
+                color: canAfford ? Colors.white : Colors.white38,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Text(
+              'Déverrouiller — $_cost 🪙',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: canAfford ? Colors.white : Colors.white38,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showConfirmDialog(BuildContext context, WidgetRef ref, bool canAfford) {
+    final credits = ref.read(walletProvider).credits;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A2840),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text(
+          'Déverrouiller la ville ?',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Cela va dépenser $_cost 🪙 pour :',
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 14),
+            ),
+            const SizedBox(height: 10),
+            _BulletPoint('Révéler 100 % du brouillard de ${city.name}'),
+            _BulletPoint('Découvrir automatiquement tous les lieux'),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: canAfford
+                    ? const Color(0xFFFFB800).withValues(alpha: 0.12)
+                    : Colors.red.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    canAfford ? Icons.account_balance_wallet_rounded : Icons.warning_rounded,
+                    size: 16,
+                    color: canAfford ? const Color(0xFFFFB800) : Colors.redAccent,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    canAfford
+                        ? 'Solde après : ${credits - _cost} 🪙'
+                        : 'Solde insuffisant ($credits 🪙)',
+                    style: TextStyle(
+                      color: canAfford ? const Color(0xFFFFB800) : Colors.redAccent,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text('Annuler', style: TextStyle(color: Colors.white.withValues(alpha: 0.5))),
+          ),
+          if (canAfford)
+            TextButton(
+              onPressed: () async {
+                Navigator.of(ctx).pop();
+                await _unlock(ref);
+              },
+              child: const Text(
+                'Confirmer',
+                style: TextStyle(color: Color(0xFFFFB800), fontWeight: FontWeight.w700),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _unlock(WidgetRef ref) async {
+    ref.read(walletProvider.notifier).addCredits(-_cost);
+    await ref.read(cityFogProvider.notifier).revealCityFully(city.id);
+    await ref.read(poiProvider.notifier).discoverAllForCity(city.id);
+  }
+}
+
+class _BulletPoint extends StatelessWidget {
+  final String text;
+  const _BulletPoint(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('• ', style: TextStyle(color: Colors.white.withValues(alpha: 0.5))),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 13),
             ),
           ),
         ],

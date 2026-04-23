@@ -27,34 +27,57 @@ class LocationService {
   }
 
   /// Cap en degrés (0 = Nord, sens horaire), calculé en temps réel
-  /// via accéléromètre + magnétomètre avec compensation d'inclinaison.
+  /// via accéléromètre + magnétomètre avec compensation d'inclinaison et lissage.
   Stream<double> headingStream() {
     late StreamController<double> controller;
-    double ax = 0, ay = 0, az = 9.8;
     StreamSubscription<AccelerometerEvent>? accelSub;
     StreamSubscription<MagnetometerEvent>? magSub;
 
-    void onMag(MagnetometerEvent mag) {
+    // Valeurs filtrées (passe-bas)
+    double ax = 0, ay = 0, az = 9.8;
+    double mx = 0, my = 0, mz = 0;
+    double _smoothedHeading = 0;
+    bool _hasMag = false;
+
+    // Constantes de lissage
+    const accelAlpha = 0.08; // filtre lent pour estimer la gravité
+    const magAlpha   = 0.35; // filtre intermédiaire pour le magnétomètre
+    const headAlpha  = 0.12; // lissage final du cap (plus petit = plus doux)
+
+    void emitHeading() {
+      if (!_hasMag) return;
+
       final norm = math.sqrt(ax * ax + ay * ay + az * az);
       if (norm < 0.01) return;
-      final gx = ax / norm, gy = ay / norm;
 
-      // Compensation d'inclinaison (pitch + roll)
-      final pitch = math.asin(gx.clamp(-1.0, 1.0));
+      // Angles d'inclinaison depuis le vecteur gravité normalisé
+      final gx = ax / norm;
+      final gy = ay / norm;
+      final gz = az / norm;
+
+      final pitch = math.asin((-gx).clamp(-1.0, 1.0));
+      final roll  = math.atan2(gy, gz);
+
       final cosP = math.cos(pitch);
-      final roll = cosP.abs() < 0.01
-          ? 0.0
-          : math.asin((-gy / cosP).clamp(-1.0, 1.0));
+      final sinP = math.sin(pitch);
+      final cosR = math.cos(roll);
+      final sinR = math.sin(roll);
 
-      final xh = mag.x * math.cos(pitch) + mag.z * math.sin(pitch);
-      final yh = mag.x * math.sin(roll) * math.sin(pitch) +
-          mag.y * math.cos(roll) -
-          mag.z * math.sin(roll) * math.cos(pitch);
+      // Composantes horizontales compensées en inclinaison
+      final xh = mx * cosP + mz * sinP;
+      final yh = mx * sinR * sinP + my * cosR - mz * sinR * cosP;
 
-      var heading = math.atan2(xh, yh) * 180 / math.pi;
-      if (heading < 0) heading += 360;
+      // atan2(-yh, xh) : formule standard cap boussole (Nord=0, sens horaire)
+      var raw = math.atan2(-yh, xh) * 180 / math.pi;
+      if (raw < 0) raw += 360;
 
-      if (!controller.isClosed) controller.add(heading);
+      // Lissage circulaire : interpole sur le chemin angulaire le plus court
+      var diff = raw - _smoothedHeading;
+      if (diff >  180) diff -= 360;
+      if (diff < -180) diff += 360;
+      _smoothedHeading = (_smoothedHeading + headAlpha * diff + 360) % 360;
+
+      if (!controller.isClosed) controller.add(_smoothedHeading);
     }
 
     controller = StreamController<double>(
@@ -62,13 +85,19 @@ class LocationService {
         accelSub = accelerometerEventStream(
           samplingPeriod: SensorInterval.normalInterval,
         ).listen((e) {
-          ax = e.x;
-          ay = e.y;
-          az = e.z;
+          ax = accelAlpha * e.x + (1 - accelAlpha) * ax;
+          ay = accelAlpha * e.y + (1 - accelAlpha) * ay;
+          az = accelAlpha * e.z + (1 - accelAlpha) * az;
         });
         magSub = magnetometerEventStream(
           samplingPeriod: SensorInterval.normalInterval,
-        ).listen(onMag);
+        ).listen((e) {
+          mx = magAlpha * e.x + (1 - magAlpha) * mx;
+          my = magAlpha * e.y + (1 - magAlpha) * my;
+          mz = magAlpha * e.z + (1 - magAlpha) * mz;
+          _hasMag = true;
+          emitHeading();
+        });
       },
       onCancel: () {
         accelSub?.cancel();
