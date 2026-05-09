@@ -28,6 +28,13 @@ import '../../providers/poi_providers.dart';
 import '../../widgets/poi_layer.dart';
 import '../poi/poi_detail_screen.dart';
 import '../city/city_detail_screen.dart';
+import 'widgets/personal_pin_sheet.dart';
+import '../../providers/personal_pin_provider.dart';
+import '../../../domain/entities/personal_pin.dart';
+import '../../providers/walker_profile_provider.dart';
+import '../../providers/km_milestone_provider.dart';
+import '../profile/walker_profile_screen.dart' show WalkerProfileScreen, RarityBadge;
+import '../splash/splash_screen.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -40,6 +47,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     with TickerProviderStateMixin {
   final MapController _mapController = MapController();
   String? _selectedCityId;
+  Set<String>? _emotionFilter; // null = tout afficher
   late AnimationController _pulseCtrl;
   late Animation<double> _pulseAnim;
 
@@ -115,6 +123,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     });
   }
 
+  void _showMilestoneBanner(BuildContext context, double km, WalkerAnimal animal) {
+    final overlay = Overlay.of(context);
+    late OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (_) => _KmMilestoneBanner(
+        km: km,
+        animal: animal,
+        onDone: () => entry.remove(),
+      ),
+    );
+    overlay.insert(entry);
+  }
+
   @override
   Widget build(BuildContext context) {
     final positionAsync = ref.watch(initialPositionProvider);
@@ -124,6 +145,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
     // City Fog — lu ici pour que HomeScreen se rebuilde quand les villes changent
     final cityFog = ref.watch(cityFogProvider);
+
+    // Milestones km
+    ref.listen<double?>(pendingKmMilestoneProvider, (prev, next) {
+      if (next != null && next != prev) {
+        final profile = ref.read(walkerProfileProvider);
+        _showMilestoneBanner(context, next, profile.animal);
+        ref.read(lastShownMilestoneProvider.notifier).acknowledge(next);
+      }
+    });
 
     // POIs — initialise le notifier et reconstruit la carte lors de découvertes
     final poiState = ref.watch(poiProvider);
@@ -135,12 +165,22 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           // Carte plein écran
           positionAsync.when(
             data: (position) => _buildMap(position, routeState, cityFog, poiState, _selectedCityId),
-            loading: () => const _MapPlaceholder(),
-            error: (_, __) => const _MapPlaceholder(),
+            loading: () => const SplashScreen(),
+            error: (_, __) => const SplashScreen(),
           ),
 
           // ── Nouvelle top bar ──────────────────────────────────────────────
           const Positioned(top: 0, left: 0, right: 0, child: TopBar()),
+
+          // ── Indicateur de chargement POIs ────────────────────────────────
+          if (cityFog.currentCityId != null &&
+              poiState.isLoading(cityFog.currentCityId!))
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: _PoiLoadingBanner(),
+            ),
 
           // Bouton recentrer (bas droite, au-dessus de la nav)
           Positioned(
@@ -202,6 +242,26 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
             child: _CityChangeBanner(),
           ),
 
+          // ── Bouton "épingle" personnel ───────────────────────────────────
+          Positioned(
+            bottom: 200,
+            right: 16,
+            child: _PinButton(
+              onTap: () => _onAddPinTapped(context),
+              onLongPress: () => _onFilterPinsTapped(context),
+              hasActiveFilter: _emotionFilter != null,
+            ),
+          ),
+
+          // ── Badge profil animal ──────────────────────────────────────────
+          Positioned(
+            bottom: 140,
+            left: 16,
+            child: _AnimalBadge(
+              onTap: () => _showProfileSheet(context),
+            ),
+          ),
+
           // ── Pilule pas + barre de navigation ─────────────────────────────
           Positioned(
             bottom: 0,
@@ -216,6 +276,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           ),
         ],
       ),
+    );
+  }
+
+  void _showProfileSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => const _ProfileSheet(),
     );
   }
 
@@ -343,8 +412,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                 final progress = (c.revealedRatio / City.requiredRatio).clamp(0.0, 1.0);
                 return Marker(
                   point: center,
-                  width: 120,
-                  height: 90,
+                  width: 110,
+                  height: 32,
                   child: _CityLockMarker(
                     name: c.name,
                     progress: progress,
@@ -407,6 +476,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
             ),
           ),
         ),
+        // ── Pins personnels (avec clustering) ────────────────────────────
+        Consumer(builder: (context, ref, _) {
+          final pins = ref.watch(personalPinProvider);
+          return _PinClusterLayer(
+            pins: pins,
+            emotionFilter: _emotionFilter,
+            mapController: _mapController,
+          );
+        }),
+        // ── Marqueur utilisateur ─────────────────────────────────────────
         Consumer(builder: (context, ref, _) {
           final livePos = ref.watch(positionStreamProvider).valueOrNull ?? position;
           final heading = ref.watch(headingStreamProvider).valueOrNull ?? 0.0;
@@ -423,6 +502,72 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         }),
       ],
     );
+  }
+
+  Future<void> _onFilterPinsTapped(BuildContext context) async {
+    final pins = ref.read(personalPinProvider);
+    if (pins.isEmpty) return;
+
+    final result = await showModalBottomSheet<Set<String>?>(
+      context: context,
+      backgroundColor: AppColors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) => _PinFilterSheet(
+        pins: pins,
+        activeFilter: _emotionFilter,
+      ),
+    );
+    // result == null → l'utilisateur a fermé sans choisir (on ne change rien)
+    if (!context.mounted) return;
+    if (result != null) {
+      setState(() => _emotionFilter = result.isEmpty ? null : result);
+    }
+  }
+
+  Future<void> _onAddPinTapped(BuildContext context) async {
+    final position = ref.read(positionStreamProvider).valueOrNull
+        ?? ref.read(initialPositionProvider).valueOrNull;
+    if (position == null) return;
+
+    final result = await showModalBottomSheet<PinResult>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) => const PersonalPinSheet(),
+    );
+    if (result == null) return;
+
+    final cityFog = ref.read(cityFogProvider);
+    final currentCity = cityFog.cities.values
+        .where((c) => _pip(LatLng(position.latitude, position.longitude), c.polygon))
+        .firstOrNull;
+
+    final pin = PersonalPin(
+      id: '${DateTime.now().millisecondsSinceEpoch}',
+      latitude: position.latitude,
+      longitude: position.longitude,
+      emoji: result.emoji,
+      label: result.label,
+      photoPath: result.photoPath,
+      createdAt: DateTime.now(),
+      cityId: currentCity?.id ?? cityFog.currentCityId,
+    );
+    await ref.read(personalPinProvider.notifier).add(pin);
+
+    // Révèle le brouillard autour du pin, comme lors d'une découverte de POI
+    final pinCityId = pin.cityId;
+    if (pinCityId != null) {
+      ref.read(cityFogProvider.notifier).revealAroundPoint(
+        pinCityId,
+        LatLng(pin.latitude, pin.longitude),
+        150.0,
+      );
+    }
   }
 
   Future<void> _onGoTapped(BuildContext context) async {
@@ -499,7 +644,7 @@ class _BottomArea extends ConsumerWidget {
         .length;
 
     final cityFog = ref.watch(cityFogProvider);
-    final huntUnlocked = cityFog.cities.values.any((c) => c.isUnlocked);
+    final huntUnlocked = AppConstants.testMode || cityFog.cities.values.any((c) => c.isUnlocked);
 
     return SafeArea(
       top: false,
@@ -669,20 +814,6 @@ class _NavBtn extends StatelessWidget {
 }
 
 // ─── Placeholder carte ────────────────────────────────────────────────────────
-
-class _MapPlaceholder extends StatelessWidget {
-  const _MapPlaceholder();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: AppColors.parchment,
-      child: const Center(
-        child: CircularProgressIndicator(color: AppColors.terra, strokeWidth: 2),
-      ),
-    );
-  }
-}
 
 // ─── Bouton recentrer ─────────────────────────────────────────────────────────
 
@@ -876,18 +1007,24 @@ class _QuestLoadingDialogState extends State<_QuestLoadingDialog> {
 
 // ─── Photo / placeholder chasse ───────────────────────────────────────────────
 
-class _QuestPhotoCard extends StatelessWidget {
+class _QuestPhotoCard extends ConsumerWidget {
   final String? photoPath;
   final String? emotionEmoji;
 
   const _QuestPhotoCard({this.photoPath, this.emotionEmoji});
 
   @override
-  Widget build(BuildContext context) {
-    final hasPhoto = photoPath != null && File(photoPath!).existsSync();
+  Widget build(BuildContext context, WidgetRef ref) {
+    final docsDir = ref.watch(appDocsDirProvider).valueOrNull;
+    // Si photoPath est déjà un chemin absolu (anciens enregistrements),
+    // on l'utilise tel quel ; sinon on reconstruit depuis docsDir + basename.
+    final fullPath = photoPath == null
+        ? null
+        : (photoPath!.contains('/') ? photoPath : (docsDir != null ? '$docsDir/$photoPath' : null));
+    final hasPhoto = fullPath != null && File(fullPath).existsSync();
 
     return GestureDetector(
-      onTap: () => _showFullScreen(context, hasPhoto),
+      onTap: () => _showFullScreen(context, hasPhoto, fullPath),
       child: Container(
         width: 72,
         height: 72,
@@ -905,7 +1042,7 @@ class _QuestPhotoCard extends StatelessWidget {
         child: ClipRRect(
           borderRadius: BorderRadius.circular(13),
           child: hasPhoto
-              ? Image.file(File(photoPath!), fit: BoxFit.cover)
+              ? Image.file(File(fullPath), fit: BoxFit.cover)
               : Container(
                   color: AppColors.white,
                   child: Center(
@@ -920,14 +1057,14 @@ class _QuestPhotoCard extends StatelessWidget {
     );
   }
 
-  void _showFullScreen(BuildContext context, bool hasPhoto) {
+  void _showFullScreen(BuildContext context, bool hasPhoto, String? fullPath) {
     Navigator.of(context).push(
       PageRouteBuilder(
         opaque: false,
         barrierColor: Colors.black87,
         barrierDismissible: true,
         pageBuilder: (_, __, ___) => _FullScreenPhoto(
-          photoPath: hasPhoto ? photoPath : null,
+          photoPath: hasPhoto ? fullPath : null,
           emotionEmoji: emotionEmoji,
         ),
         transitionsBuilder: (_, animation, __, child) =>
@@ -1148,7 +1285,469 @@ class _CityChangeBannerState extends ConsumerState<_CityChangeBanner>
   }
 }
 
-// ─── Marqueur cadenas "style jeu" ─────────────────────────────────────────────
+// ─── Bandeau chargement POIs ──────────────────────────────────────────────────
+
+class _PoiLoadingBanner extends StatefulWidget {
+  @override
+  State<_PoiLoadingBanner> createState() => _PoiLoadingBannerState();
+}
+
+class _PoiLoadingBannerState extends State<_PoiLoadingBanner>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _fade;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    )..forward();
+    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _fade,
+      child: SafeArea(
+        bottom: false,
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: Padding(
+            padding: const EdgeInsets.only(top: 72),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0F1E30).withValues(alpha: 0.92),
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.12),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.25),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white.withValues(alpha: 0.7),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    'Chargement des lieux…',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.85),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Badge animal flottant ────────────────────────────────────────────────────
+
+class _AnimalBadge extends ConsumerStatefulWidget {
+  final VoidCallback onTap;
+  const _AnimalBadge({required this.onTap});
+
+  @override
+  ConsumerState<_AnimalBadge> createState() => _AnimalBadgeState();
+}
+
+class _AnimalBadgeState extends ConsumerState<_AnimalBadge>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _pulse;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2600),
+    )..repeat(reverse: true);
+    _pulse = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final profile = ref.watch(walkerProfileProvider);
+    final color   = profile.animal.color;
+
+    return GestureDetector(
+      onTap: widget.onTap,
+      child: AnimatedBuilder(
+        animation: _pulse,
+        builder: (_, child) => Container(
+          width: 52,
+          height: 52,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: Colors.white,
+            border: Border.all(
+              color: color.withValues(alpha: 0.4 + 0.3 * _pulse.value),
+              width: 2.5,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: color.withValues(alpha: 0.20 + 0.15 * _pulse.value),
+                blurRadius: 12 + 6 * _pulse.value,
+                spreadRadius: 1,
+              ),
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.10),
+                blurRadius: 8,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: child,
+        ),
+        child: Center(
+          child: Text(
+            profile.animal.emoji,
+            style: const TextStyle(fontSize: 26),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Profile bottom sheet compact ─────────────────────────────────────────────
+
+class _ProfileSheet extends ConsumerWidget {
+  const _ProfileSheet();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final profile = ref.watch(walkerProfileProvider);
+    final animal  = profile.animal;
+    final color   = animal.color;
+
+    final axes = [
+      ('🏃', '  Vitesse',    profile.speed),
+      ('💪', '  Endurance',  profile.endurance),
+      ('🗺️', '  Exploration', profile.exploration),
+      ('🔍', '  Curiosité',  profile.curiosity),
+      ('⚡', '  Activité',   profile.activity),
+    ];
+
+    final km = profile.totalKm;
+    final kmStr = km >= 10 ? '${km.round()} km' : '${km.toStringAsFixed(1)} km';
+
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      padding: EdgeInsets.fromLTRB(
+        24, 16, 24,
+        MediaQuery.of(context).padding.bottom + 24,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Drag handle
+          Center(
+            child: Container(
+              width: 40, height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.sandLight,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          // ── Emoji + titre ──────────────────────────────────────────────
+          Row(
+            children: [
+              Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: color.withValues(alpha: 0.10),
+                  border: Border.all(color: color.withValues(alpha: 0.30), width: 2),
+                ),
+                child: Center(
+                  child: Text(animal.emoji, style: const TextStyle(fontSize: 32)),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      animal.title,
+                      style: AppText.sectionTitle.copyWith(fontSize: 18),
+                    ),
+                    const SizedBox(height: 6),
+                    RarityBadge(rarity: animal.rarity),
+                  ],
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 20),
+
+          // ── Axes compacts ──────────────────────────────────────────────
+          ...axes.map((axis) => Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              children: [
+                Text(axis.$1, style: const TextStyle(fontSize: 13)),
+                SizedBox(
+                  width: 88,
+                  child: Text(
+                    axis.$2,
+                    style: AppText.body.copyWith(fontSize: 12, color: AppColors.ink.withValues(alpha: 0.65)),
+                  ),
+                ),
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: axis.$3,
+                      minHeight: 6,
+                      backgroundColor: AppColors.sandLight,
+                      valueColor: AlwaysStoppedAnimation<Color>(color),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          )),
+
+          const SizedBox(height: 16),
+
+          // ── Stats rapides ──────────────────────────────────────────────
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _QuickStat('🗺️', kmStr, 'parcourus'),
+              _QuickStat('🏙️', '${profile.citiesVisited}', 'quartiers'),
+              _QuickStat('🏁', '${profile.questsCompleted}', 'chasses'),
+              _QuickStat('🏆', '${profile.trophiesCount}', 'trophées'),
+            ],
+          ),
+
+          const SizedBox(height: 16),
+
+          // ── Teaser prochaine évolution ─────────────────────────────────
+          if (profile.nextEvolution != null)
+            _NextEvolutionTeaser(evo: profile.nextEvolution!),
+
+          const SizedBox(height: 16),
+
+          // ── Bouton profil complet ──────────────────────────────────────
+          GestureDetector(
+            onTap: () {
+              Navigator.of(context).pop();
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const WalkerProfileScreen(),
+                ),
+              );
+            },
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [color, color.withValues(alpha: 0.75)],
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
+                ),
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: [
+                  BoxShadow(
+                    color: color.withValues(alpha: 0.30),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Text(
+                'Voir le profil complet  →',
+                textAlign: TextAlign.center,
+                style: AppText.metric.copyWith(color: Colors.white, fontSize: 14),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NextEvolutionTeaser extends StatelessWidget {
+  final ProfileEvolution evo;
+  const _NextEvolutionTeaser({required this.evo});
+
+  @override
+  Widget build(BuildContext context) {
+    final color    = evo.animal.color;
+    final progress = evo.overallProgress;
+    final missing  = evo.conditions.where((c) => !c.isMet).toList();
+    final first    = missing.isNotEmpty ? missing.first : null;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        children: [
+          Text(evo.animal.emoji, style: const TextStyle(fontSize: 26)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      'Prochaine évolution',
+                      style: AppText.label.copyWith(
+                        color: color, letterSpacing: 0.8, fontSize: 10,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    RarityBadge(rarity: evo.animal.rarity),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(3),
+                  child: LinearProgressIndicator(
+                    value: progress, minHeight: 5,
+                    backgroundColor: color.withValues(alpha: 0.15),
+                    valueColor: AlwaysStoppedAnimation<Color>(color),
+                  ),
+                ),
+                if (first != null) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    'Il manque ${first.remaining < 10 ? first.remaining.toStringAsFixed(1) : first.remaining.toStringAsFixed(0)} ${first.unit}',
+                    style: AppText.label.copyWith(
+                      color: color.withValues(alpha: 0.85),
+                      letterSpacing: 0.3,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _QuickStat extends StatelessWidget {
+  final String emoji;
+  final String value;
+  final String label;
+  const _QuickStat(this.emoji, this.value, this.label);
+
+  @override
+  Widget build(BuildContext context) => Column(
+    children: [
+      Text(emoji, style: const TextStyle(fontSize: 18)),
+      const SizedBox(height: 2),
+      Text(value, style: AppText.metric.copyWith(fontSize: 14)),
+      Text(label, style: AppText.label.copyWith(fontSize: 9, letterSpacing: 0.3)),
+    ],
+  );
+}
+
+// ─── Visionneuse photo plein écran ────────────────────────────────────────────
+
+class _PinFullScreenPhoto extends StatelessWidget {
+  final String path;
+  const _PinFullScreenPhoto({required this.path});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          // Photo interactive (pinch-to-zoom)
+          Center(
+            child: InteractiveViewer(
+              minScale: 0.8,
+              maxScale: 5.0,
+              child: Image.file(File(path), fit: BoxFit.contain),
+            ),
+          ),
+          // Bouton fermer
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: GestureDetector(
+                onTap: () => Navigator.of(context).pop(),
+                child: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.55),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.close_rounded,
+                    color: Colors.white,
+                    size: 22,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Marqueur cadenas compact ─────────────────────────────────────────────────
 
 class _CityLockMarker extends StatelessWidget {
   final String name;
@@ -1163,97 +1762,715 @@ class _CityLockMarker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final pct = (progress * 100).toStringAsFixed(0);
     return GestureDetector(
       onTap: onTap,
-      child: Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // ── Boîte cadenas 3D ────────────────────────────────────────────────
-        Stack(
-          clipBehavior: Clip.none,
-          alignment: Alignment.center,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.93),
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.14),
+              blurRadius: 8,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            // Ombre portée (effet 3D)
+            const Icon(Icons.lock_rounded, size: 13, color: Color(0xFF8FA8C0)),
+            const SizedBox(width: 5),
+            // Barre de progression
+            ClipRRect(
+              borderRadius: BorderRadius.circular(3),
+              child: SizedBox(
+                width: 40,
+                height: 5,
+                child: LinearProgressIndicator(
+                  value: progress,
+                  backgroundColor: const Color(0xFFE2EAF4),
+                  valueColor: const AlwaysStoppedAnimation(Color(0xFFFFB300)),
+                ),
+              ),
+            ),
+            const SizedBox(width: 5),
+            Text(
+              '$pct%',
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF5A6A82),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Bouton épingle personnel ─────────────────────────────────────────────────
+
+class _PinButton extends StatelessWidget {
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
+  final bool hasActiveFilter;
+
+  const _PinButton({
+    required this.onTap,
+    required this.onLongPress,
+    required this.hasActiveFilter,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      onLongPress: onLongPress,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.95),
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.14),
+                  blurRadius: 10,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: const Center(
+              child: Text('📍', style: TextStyle(fontSize: 20)),
+            ),
+          ),
+          // Badge filtre actif
+          if (hasActiveFilter)
             Positioned(
-              bottom: -5,
+              top: 0,
+              right: 0,
               child: Container(
-                width: 52,
-                height: 8,
+                width: 12,
+                height: 12,
                 decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.20),
-                  borderRadius: BorderRadius.circular(26),
+                  color: const Color(0xFFFFB800),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 1.5),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Clustering des pins personnels ───────────────────────────────────────────
+
+class _PinGroup {
+  final List<PersonalPin> pins;
+  final LatLng center;
+  const _PinGroup({required this.pins, required this.center});
+}
+
+class _PinClusterLayer extends StatelessWidget {
+  final List<PersonalPin> pins;
+  final Set<String>? emotionFilter;
+  final MapController mapController;
+
+  const _PinClusterLayer({
+    required this.pins,
+    required this.emotionFilter,
+    required this.mapController,
+  });
+
+  // Rayon de clustering en degrés selon le zoom (distance carrée utilisée)
+  static double _clusterRadius(double zoom) {
+    if (zoom >= 16) return 0.0003;
+    if (zoom >= 15) return 0.0006;
+    if (zoom >= 14) return 0.0012;
+    if (zoom >= 13) return 0.0025;
+    return 0.005;
+  }
+
+  List<_PinGroup> _cluster(List<PersonalPin> filtered, double zoom) {
+    final r2 = _clusterRadius(zoom);
+    final groups = <_PinGroup>[];
+    final assigned = <String>{};
+
+    for (final pin in filtered) {
+      if (assigned.contains(pin.id)) continue;
+      final nearby = filtered.where((p) {
+        if (assigned.contains(p.id)) return false;
+        final dlat = pin.latitude - p.latitude;
+        final dlon = pin.longitude - p.longitude;
+        return (dlat * dlat + dlon * dlon) <= r2 * r2;
+      }).toList();
+      for (final p in nearby) assigned.add(p.id);
+      final lat = nearby.map((p) => p.latitude).reduce((a, b) => a + b) / nearby.length;
+      final lon = nearby.map((p) => p.longitude).reduce((a, b) => a + b) / nearby.length;
+      groups.add(_PinGroup(pins: nearby, center: LatLng(lat, lon)));
+    }
+    return groups;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<MapEvent>(
+      stream: mapController.mapEventStream,
+      builder: (context, _) {
+        double zoom;
+        try { zoom = mapController.camera.zoom; } catch (_) { zoom = 15.0; }
+
+        final filtered = emotionFilter == null
+            ? pins
+            : pins.where((p) => emotionFilter!.contains(p.label)).toList();
+
+        final groups = _cluster(filtered, zoom);
+
+        return MarkerLayer(
+          markers: groups.map((g) => Marker(
+            point: g.center,
+            width: 44,
+            height: 44,
+            child: g.pins.length == 1
+                ? _PersonalPinMarker(
+                    pin: g.pins.first,
+                    onTap: () => _showPinDetail(context, g.pins.first),
+                  )
+                : _ClusterMarker(count: g.pins.length),
+          )).toList(),
+        );
+      },
+    );
+  }
+}
+
+class _ClusterMarker extends StatelessWidget {
+  final int count;
+  const _ClusterMarker({required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 44,
+      height: 44,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: const Color(0xFF7C3AED),
+        border: Border.all(color: Colors.white, width: 2.5),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF7C3AED).withValues(alpha: 0.40),
+            blurRadius: 8,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Center(
+        child: Text(
+          '$count',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 15,
+            fontWeight: FontWeight.w800,
+            height: 1,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Sheet de filtrage par émotion ────────────────────────────────────────────
+
+class _PinFilterSheet extends StatefulWidget {
+  final List<PersonalPin> pins;
+  final Set<String>? activeFilter;
+
+  const _PinFilterSheet({required this.pins, required this.activeFilter});
+
+  @override
+  State<_PinFilterSheet> createState() => _PinFilterSheetState();
+}
+
+class _PinFilterSheetState extends State<_PinFilterSheet> {
+  late Set<String> _selected;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = Set.from(widget.activeFilter ?? {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Compte les pins par émotion
+    final counts = <String, ({String emoji, int count})>{};
+    for (final pin in widget.pins) {
+      final entry = counts[pin.label];
+      counts[pin.label] = (
+        emoji: pin.emoji,
+        count: (entry?.count ?? 0) + 1,
+      );
+    }
+    final emotions = counts.entries.toList()
+      ..sort((a, b) => b.value.count.compareTo(a.value.count));
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(24, 20, 24, MediaQuery.of(context).viewInsets.bottom + 28),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Container(
+              width: 40, height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.sandLight,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          Text('Filtrer mes souvenirs', style: AppText.sectionTitle),
+          const SizedBox(height: 4),
+          Text(
+            'Appui long sur 📍 pour ouvrir ce filtre',
+            style: AppText.label.copyWith(letterSpacing: 0),
+          ),
+          const SizedBox(height: 16),
+
+          // ── Pill "Tout afficher" ──────────────────────────────────────────
+          GestureDetector(
+            onTap: () => setState(() => _selected.clear()),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              margin: const EdgeInsets.only(bottom: 10),
+              decoration: BoxDecoration(
+                color: _selected.isEmpty ? AppColors.terraLight : AppColors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: _selected.isEmpty ? AppColors.terra : AppColors.sandLight,
+                  width: _selected.isEmpty ? 2 : 1,
+                ),
+              ),
+              child: Text(
+                'Tout afficher — ${widget.pins.length} souvenir${widget.pins.length > 1 ? 's' : ''}',
+                textAlign: TextAlign.center,
+                style: AppText.label.copyWith(
+                  letterSpacing: 0,
+                  fontWeight: _selected.isEmpty ? FontWeight.bold : FontWeight.w500,
+                  color: _selected.isEmpty ? AppColors.terra : AppColors.sand,
+                ),
+              ),
+            ),
+          ),
+
+          // ── Pills émotions ────────────────────────────────────────────────
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: emotions.map((e) {
+              final isOn = _selected.contains(e.key);
+              return GestureDetector(
+                onTap: () => setState(() {
+                  if (isOn) _selected.remove(e.key);
+                  else _selected.add(e.key);
+                }),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                  decoration: BoxDecoration(
+                    color: isOn ? const Color(0xFF7C3AED).withValues(alpha: 0.10) : AppColors.white,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: isOn ? const Color(0xFF7C3AED) : AppColors.sandLight,
+                      width: isOn ? 1.8 : 1,
+                    ),
+                  ),
+                  child: Text(
+                    '${e.value.emoji} ${e.key}  ${e.value.count}',
+                    style: AppText.label.copyWith(
+                      letterSpacing: 0,
+                      fontWeight: isOn ? FontWeight.bold : FontWeight.w500,
+                      color: isOn ? const Color(0xFF7C3AED) : AppColors.ink.withValues(alpha: 0.7),
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+
+          const SizedBox(height: 20),
+
+          // ── Bouton appliquer ──────────────────────────────────────────────
+          SizedBox(
+            width: double.infinity,
+            child: GestureDetector(
+              onTap: () => Navigator.of(context).pop(_selected),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 15),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFFFFB800), Color(0xFFFF8C00)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(14),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.12),
-                      blurRadius: 8,
-                      spreadRadius: 2,
+                      color: const Color(0xFFFFB800).withValues(alpha: 0.35),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Text(
+                  _selected.isEmpty ? 'Afficher tout' : 'Appliquer le filtre',
+                  textAlign: TextAlign.center,
+                  style: AppText.metric.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Marqueur pin personnel sur la carte ──────────────────────────────────────
+
+void _showPinDetail(BuildContext context, PersonalPin pin) {
+  showModalBottomSheet(
+    context: context,
+    backgroundColor: AppColors.white,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    ),
+    builder: (_) => _PinDetailSheet(pin: pin),
+  );
+}
+
+class _PersonalPinMarker extends StatelessWidget {
+  final PersonalPin pin;
+  final VoidCallback onTap;
+
+  const _PersonalPinMarker({required this.pin, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: const Color(0xFF7C3AED),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF7C3AED).withValues(alpha: 0.40),
+              blurRadius: 8,
+              offset: const Offset(0, 3),
+            ),
+          ],
+          border: Border.all(color: Colors.white, width: 2),
+        ),
+        child: Center(
+          child: Text(pin.emoji, style: const TextStyle(fontSize: 20)),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Fiche détail d'un pin personnel ──────────────────────────────────────────
+
+class _PinDetailSheet extends ConsumerWidget {
+  final PersonalPin pin;
+  const _PinDetailSheet({required this.pin});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final d = pin.createdAt;
+    final dateStr =
+        '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+
+    // Résolution du chemin photo : pin.photoPath est un nom de fichier simple
+    final docsDir  = ref.watch(appDocsDirProvider).valueOrNull;
+    final fullPath = (pin.photoPath != null && docsDir != null)
+        ? '$docsDir/${pin.photoPath}'
+        : null;
+    final photoExists = fullPath != null && File(fullPath).existsSync();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Drag handle
+          Center(
+            child: Container(
+              width: 40, height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.sandLight,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          // ── Photo (aperçu cliquable → plein écran) ────────────────────────
+          if (photoExists) ...[
+            GestureDetector(
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => _PinFullScreenPhoto(path: fullPath),
+                ),
+              ),
+              child: Stack(
+                children: [
+                  SizedBox(
+                    width: double.infinity,
+                    height: 200,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(16),
+                      child: Image.file(
+                        File(fullPath),
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Container(
+                          color: AppColors.sandLight,
+                          child: const Center(
+                            child: Icon(Icons.broken_image_outlined, size: 40, color: AppColors.sand),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Indicateur "tap pour agrandir"
+                  Positioned(
+                    bottom: 10,
+                    right: 10,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.50),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.fullscreen, color: Colors.white, size: 14),
+                          SizedBox(width: 4),
+                          Text(
+                            'Agrandir',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+
+          // ── Émotion + date ────────────────────────────────────────────────
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF7C3AED).withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: const Color(0xFF7C3AED).withValues(alpha: 0.30),
+                  ),
+                ),
+                child: Text(
+                  '${pin.emoji}  ${pin.label}',
+                  style: AppText.label.copyWith(
+                    letterSpacing: 0,
+                    fontWeight: FontWeight.w700,
+                    color: const Color(0xFF7C3AED),
+                  ),
+                ),
+              ),
+              const Spacer(),
+              Text(
+                dateStr,
+                style: AppText.label.copyWith(
+                  letterSpacing: 0,
+                  color: AppColors.sand,
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 16),
+
+          // ── Bouton supprimer ──────────────────────────────────────────────
+          SizedBox(
+            width: double.infinity,
+            child: TextButton.icon(
+              onPressed: () {
+                ref.read(personalPinProvider.notifier).remove(pin.id);
+                Navigator.of(context).pop();
+              },
+              icon: const Icon(Icons.delete_outline, size: 18),
+              label: const Text('Supprimer ce souvenir'),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.terra,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Bannière milestone km ────────────────────────────────────────────────────
+
+class _KmMilestoneBanner extends StatefulWidget {
+  final double km;
+  final WalkerAnimal animal;
+  final VoidCallback onDone;
+
+  const _KmMilestoneBanner({
+    required this.km,
+    required this.animal,
+    required this.onDone,
+  });
+
+  @override
+  State<_KmMilestoneBanner> createState() => _KmMilestoneBannerState();
+}
+
+class _KmMilestoneBannerState extends State<_KmMilestoneBanner>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<Offset> _slide;
+  late final Animation<double> _fade;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+    _slide = Tween<Offset>(
+      begin: const Offset(0, -1),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
+    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeIn);
+
+    _ctrl.forward();
+    Future.delayed(const Duration(seconds: 4), _dismiss);
+  }
+
+  Future<void> _dismiss() async {
+    if (!mounted) return;
+    await _ctrl.reverse();
+    widget.onDone();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final kmLabel = widget.km >= 1
+        ? '${widget.km.toInt()} km'
+        : '${(widget.km * 1000).toInt()} m';
+    final message = kMilestoneMessages[widget.km.toInt()] ?? 'Nouveau palier atteint !';
+
+    return Positioned(
+      top: MediaQuery.of(context).padding.top + 12,
+      left: 16,
+      right: 16,
+      child: SlideTransition(
+        position: _slide,
+        child: FadeTransition(
+          opacity: _fade,
+          child: GestureDetector(
+            onTap: _dismiss,
+            child: Material(
+              color: Colors.transparent,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                decoration: BoxDecoration(
+                  color: widget.animal.color,
+                  borderRadius: BorderRadius.circular(18),
+                  boxShadow: [
+                    BoxShadow(
+                      color: widget.animal.color.withValues(alpha: 0.45),
+                      blurRadius: 16,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Text(widget.animal.emoji,
+                        style: const TextStyle(fontSize: 32)),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            '$kmLabel parcourus !',
+                            style: AppText.metric.copyWith(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 15,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            message,
+                            style: AppText.label.copyWith(
+                              color: Colors.white.withValues(alpha: 0.85),
+                              letterSpacing: 0,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
               ),
             ),
-            // Face principale du bloc
-            Container(
-              width: 52,
-              height: 56,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(14),
-                gradient: const LinearGradient(
-                  colors: [Color(0xFFE8EEF6), Color(0xFFBCC8DA)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                boxShadow: [
-                  // Tranche inférieure (effet 3D)
-                  const BoxShadow(
-                    color: Color(0xFF8A9AB8),
-                    blurRadius: 0,
-                    offset: Offset(0, 4),
-                  ),
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.18),
-                    blurRadius: 6,
-                    offset: const Offset(0, 6),
-                  ),
-                ],
-                border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.6),
-                  width: 1.5,
-                ),
-              ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.lock_rounded, color: Color(0xFF5A6A82), size: 24),
-                  const SizedBox(height: 4),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(3),
-                      child: LinearProgressIndicator(
-                        value: progress,
-                        minHeight: 4,
-                        backgroundColor: Colors.white.withValues(alpha: 0.4),
-                        valueColor: const AlwaysStoppedAnimation(Color(0xFFFFB300)),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    '${(progress * 100).toStringAsFixed(1).replaceAll('.', ',')} %',
-                    style: const TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF5A6A82),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
+          ),
         ),
-      ],
       ),
     );
   }
 }
+

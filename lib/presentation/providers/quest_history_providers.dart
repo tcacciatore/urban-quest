@@ -41,6 +41,14 @@ class QuestHistoryEntry {
   bool get hasStartCoordinates => startLatitude != null && startLongitude != null;
   bool get hasWalkedPath => walkedPath != null && walkedPath!.length >= 2;
 
+  /// Extrait le nom de fichier simple depuis un chemin absolu éventuel.
+  /// Robuste aux anciens enregistrements qui stockaient le chemin complet.
+  static String? _toBasename(String? path) {
+    if (path == null) return null;
+    if (!path.contains('/')) return path;
+    return path.split('/').last;
+  }
+
   Map<String, dynamic> toJson() => {
         'placeName': placeName,
         'startedAt': startedAt.toIso8601String(),
@@ -51,7 +59,7 @@ class QuestHistoryEntry {
         if (longitude != null) 'longitude': longitude,
         if (emotionEmoji != null) 'emotionEmoji': emotionEmoji,
         if (emotionLabel != null) 'emotionLabel': emotionLabel,
-        if (photoPath != null) 'photoPath': photoPath,
+        if (photoPath != null) 'photoPath': _toBasename(photoPath),
         if (startLatitude != null) 'startLatitude': startLatitude,
         if (startLongitude != null) 'startLongitude': startLongitude,
         if (walkedPath != null)

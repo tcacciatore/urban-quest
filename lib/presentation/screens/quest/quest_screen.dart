@@ -488,6 +488,7 @@ class _QuestScreenState extends ConsumerState<QuestScreen> {
             onPressed: () async {
               final quest = ref.read(questProvider).valueOrNull;
               ref.read(questProvider.notifier).abandonQuest();
+              ref.read(routeProvider.notifier).clear();
               if (quest != null) {
                 await ref.read(questHistoryProvider.notifier).add(
                       QuestHistoryEntry(
@@ -537,8 +538,12 @@ class _WinDialogState extends State<_WinDialog> {
       if (photo != null && mounted) {
         final docsDir = await getApplicationDocumentsDirectory();
         final fileName = 'quest_${DateTime.now().millisecondsSinceEpoch}.jpg';
-        final permanent = await File(photo.path).copy('${docsDir.path}/$fileName');
-        if (mounted) setState(() => _photoPath = permanent.path);
+        // readAsBytes() est plus fiable que File.copy() sur iOS.
+        final bytes = await photo.readAsBytes();
+        await File('${docsDir.path}/$fileName').writeAsBytes(bytes);
+        // On stocke uniquement le basename ; appDocsDirProvider reconstruit
+        // le chemin complet au moment de l'affichage.
+        if (mounted) setState(() => _photoPath = fileName);
       }
     } finally {
       if (mounted) setState(() => _takingPhoto = false);
@@ -655,21 +660,20 @@ class _QuestInfoPanel extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final heading = ref.watch(headingStreamProvider).valueOrNull ?? 0.0;
-    // Angle relatif : bearing absolu − cap du téléphone (magnétomètre)
-    final relativeAngle = (bearing - heading) * (3.141592653589793 / 180);
+    final revealedClues = clues.where((c) => c.isRevealed).toList();
+    final lockedCount = clues.where((c) => !c.isRevealed).length;
 
     return Container(
       margin: const EdgeInsets.all(12),
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
       decoration: BoxDecoration(
         color: AppColors.white,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(24),
         border: Border.all(color: AppColors.sandLight),
         boxShadow: [
           BoxShadow(
-            color: AppColors.ink.withValues(alpha: 0.07),
-            blurRadius: 12,
+            color: AppColors.ink.withValues(alpha: 0.08),
+            blurRadius: 16,
             offset: const Offset(0, 4),
           ),
         ],
@@ -678,125 +682,132 @@ class _QuestInfoPanel extends ConsumerWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (!isHotMode) ...[
+            // ── Flèche centrée ──────────────────────────────────────────────
+            _DirectionArrow(bearing: bearing),
+            const SizedBox(height: 10),
+            // ── Emojis de distance centrés ──────────────────────────────────
+            _DistanceDisplay(distance: distance),
+            const SizedBox(height: 16),
+            Divider(color: AppColors.sandLight, height: 1),
+            const SizedBox(height: 14),
+          ],
+
+          // ── Indices révélés ─────────────────────────────────────────────
+          ...revealedClues.map((clue) => _ClueRow(clue: clue)),
+
+          // ── Indices verrouillés → une seule ligne discrète ───────────────
+          if (lockedCount > 0) ...[
+            if (revealedClues.isNotEmpty) const SizedBox(height: 8),
             Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                // Flèche directionnelle
-                _DirectionArrow(relativeAngle: relativeAngle),
-                const SizedBox(width: 20),
-                // Distance + pas
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      distance >= 1000
-                          ? '${(distance / 1000).toStringAsFixed(1)} km'
-                          : '${distance.toInt()} m',
-                      style: AppText.metric.copyWith(
-                        fontSize: 28,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.ink,
-                      ),
-                    ),
-                    Row(
-                      children: [
-                        Icon(Icons.directions_walk, color: AppColors.sand, size: 13),
-                        const SizedBox(width: 3),
-                        Text(
-                          '$stepCount pas',
-                          style: AppText.label.copyWith(letterSpacing: 0),
-                        ),
-                      ],
-                    ),
-                  ],
+                const Icon(Icons.lock_outline, size: 14, color: AppColors.sand),
+                const SizedBox(width: 6),
+                Text(
+                  lockedCount == 1
+                      ? '1 indice se déverrouille en approchant'
+                      : '$lockedCount indices se déverrouillent en approchant',
+                  style: AppText.label.copyWith(
+                    letterSpacing: 0,
+                    color: AppColors.sand,
+                  ),
                 ),
               ],
             ),
-            Divider(color: AppColors.sandLight, height: 20),
           ],
-          ...clues.map((clue) => _ClueRow(clue: clue)),
         ],
       ),
     );
   }
 }
 
-class _DirectionArrow extends StatefulWidget {
-  final double relativeAngle; // en radians
+// ── Distance en emojis ────────────────────────────────────────────────────────
 
-  const _DirectionArrow({required this.relativeAngle});
+class _DistanceDisplay extends StatelessWidget {
+  final double distance;
 
-  @override
-  State<_DirectionArrow> createState() => _DirectionArrowState();
-}
+  const _DistanceDisplay({required this.distance});
 
-class _DirectionArrowState extends State<_DirectionArrow>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _ctrl;
-  late Animation<double> _anim;
-  double _currentAngle = 0;
+  /// Système de dénominations :
+  ///   ⚽ = 500 m  (5 terrains de foot)
+  ///   🏊 = 100 m  (2 piscines olympiques)
+  ///   🏀 =  25 m  (1 terrain de basket)
+  ///   🔥        = < 20 m
+  static ({String emojis, String label}) _distanceInfo(double d) {
+    if (d < 20) return (emojis: '🔥', label: 'Tu brûles !');
 
-  @override
-  void initState() {
-    super.initState();
-    _currentAngle = widget.relativeAngle;
-    _ctrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 250),
-    );
-    _anim = Tween<double>(begin: _currentAngle, end: _currentAngle)
-        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
-  }
+    var rem = d.round();
+    final sb = StringBuffer();
 
-  @override
-  void didUpdateWidget(_DirectionArrow old) {
-    super.didUpdateWidget(old);
-    if ((old.relativeAngle - widget.relativeAngle).abs() < 0.005) return;
+    final foot = (rem ~/ 500).clamp(0, 5);
+    rem -= foot * 500;
+    for (var i = 0; i < foot; i++) sb.write('⚽');
 
-    // Normalise la différence dans [-π, π] pour prendre le chemin le plus court
-    var diff = widget.relativeAngle - _anim.value;
-    while (diff > pi) { diff -= 2 * pi; }
-    while (diff < -pi) { diff += 2 * pi; }
-    final target = _anim.value + diff;
+    final pool = (rem ~/ 100).clamp(0, 4);
+    rem -= pool * 100;
+    for (var i = 0; i < pool; i++) sb.write('🏊');
 
-    _anim = Tween<double>(begin: _anim.value, end: target)
-        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
-    _ctrl.forward(from: 0);
-    _currentAngle = target;
-  }
+    final basket = (rem ~/ 25).clamp(0, 3);
+    for (var i = 0; i < basket; i++) sb.write('🏀');
 
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
+    if (sb.isEmpty) sb.write('🏀'); // < 25 m mais > 20 m
+    final approxM = ((d / 25).round() * 25).clamp(25, 99999);
+    final label = approxM >= 1000
+        ? '≈ ${(approxM / 1000).toStringAsFixed(1)} km'
+        : '≈ $approxM m';
+    return (emojis: sb.toString(), label: label);
   }
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _anim,
-      builder: (_, __) => Container(
-        width: 64,
-        height: 64,
+    final info = _distanceInfo(distance);
+    return Text(
+      info.emojis,
+      textAlign: TextAlign.center,
+      style: const TextStyle(fontSize: 26, height: 1.2),
+    );
+  }
+}
+
+class _DirectionArrow extends ConsumerWidget {
+  /// Bearing géographique vers la cible (degrés, 0 = Nord, sens horaire).
+  final double bearing;
+
+  const _DirectionArrow({required this.bearing});
+
+  static const _pi = 3.141592653589793;
+  static const _twoPi = 2 * _pi;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final heading = ref.watch(headingStreamProvider).valueOrNull ?? 0.0;
+
+    // Angle relatif normalisé dans [-π, π]
+    var angle = (bearing - heading) * (_pi / 180);
+    while (angle > _pi) angle -= _twoPi;
+    while (angle < -_pi) angle += _twoPi;
+
+    return AnimatedRotation(
+      turns: angle / _twoPi,
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOut,
+      child: Container(
+        width: 88,
+        height: 88,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           color: AppColors.ink,
           boxShadow: [
             BoxShadow(
               color: AppColors.ink.withValues(alpha: 0.25),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
+              blurRadius: 16,
+              offset: const Offset(0, 6),
             ),
           ],
         ),
-        child: Transform.rotate(
-          angle: _anim.value,
-          child: const Icon(
-            Icons.navigation,
-            color: AppColors.parchment,
-            size: 32,
-          ),
+        child: const Icon(
+          Icons.navigation,
+          color: AppColors.parchment,
+          size: 44,
         ),
       ),
     );
@@ -811,24 +822,22 @@ class _ClueRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.only(bottom: 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            clue.isRevealed ? Icons.lightbulb : Icons.lock,
-            size: 16,
-            color: clue.isRevealed ? AppColors.forest : AppColors.sand,
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Icon(Icons.lightbulb, size: 18, color: AppColors.forest),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 10),
           Expanded(
             child: Text(
-              clue.isRevealed ? clue.text : 'Indice ${clue.index} (se déverrouille en approchant)',
-              style: AppText.hint.copyWith(
-                fontSize: 14,
-                height: 1.4,
-                color: clue.isRevealed ? AppColors.ink : AppColors.sand,
-                fontStyle: clue.isRevealed ? FontStyle.italic : FontStyle.italic,
+              clue.text,
+              style: AppText.body.copyWith(
+                fontSize: 16,
+                height: 1.5,
+                color: AppColors.ink,
               ),
             ),
           ),

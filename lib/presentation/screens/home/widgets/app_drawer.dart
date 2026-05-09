@@ -13,6 +13,8 @@ import '../../../providers/city_fog_provider.dart';
 import '../../../providers/poi_providers.dart';
 import '../../../providers/rainbow_provider.dart';
 import '../../../providers/claimed_missions_provider.dart';
+import '../../../providers/walker_profile_provider.dart';
+import '../../profile/walker_profile_screen.dart';
 
 class AppDrawer extends ConsumerWidget {
   const AppDrawer({super.key});
@@ -94,8 +96,9 @@ class AppDrawer extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final historyAsync = ref.watch(questHistoryProvider);
+    final historyAsync  = ref.watch(questHistoryProvider);
     final trophiesAsync = ref.watch(trophyProvider);
+    final profile       = ref.watch(walkerProfileProvider);
 
     return Drawer(
       backgroundColor: AppColors.parchment,
@@ -130,6 +133,69 @@ class AppDrawer extends ConsumerWidget {
             ),
             Divider(color: AppColors.sandLight, height: 1),
             const SizedBox(height: 8),
+
+            // ── Carte profil ─────────────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: GestureDetector(
+                onTap: () {
+                  Navigator.of(context).pop();
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const WalkerProfileScreen(),
+                    ),
+                  );
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        profile.animal.color.withValues(alpha: 0.15),
+                        profile.animal.color.withValues(alpha: 0.05),
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: profile.animal.color.withValues(alpha: 0.30),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Text(
+                        profile.animal.emoji,
+                        style: const TextStyle(fontSize: 28),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              profile.animal.title,
+                              style: AppText.body.copyWith(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 14,
+                              ),
+                            ),
+                            Text(
+                              'Voir mon profil →',
+                              style: AppText.label.copyWith(
+                                letterSpacing: 0.5,
+                                color: profile.animal.color,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Divider(color: AppColors.sandLight, height: 1),
+            const SizedBox(height: 4),
 
             Expanded(
               child: ListView(

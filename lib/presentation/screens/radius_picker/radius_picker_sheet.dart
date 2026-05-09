@@ -17,17 +17,24 @@ class _RadiusPickerSheetState extends ConsumerState<RadiusPickerSheet> {
   String? _selectedDirection; // null = aléatoire
 
   static const _labels = {
-    500: ('500m', '~5 min'),
-    1000: ('1 km', '~12 min'),
-    2000: ('2 km', '~25 min'),
+    500:  ('🐌 Balade',      '500 m · ~5 min'),
+    1000: ('🦊 Exploration', '1 km · ~12 min'),
+    2000: ('🐆 Sprint',      '2 km · ~25 min'),
   };
 
   // Grille 3×3 : null = centre (aléatoire)
   static const _compassGrid = [
     ['NO', 'N', 'NE'],
-    ['O', null, 'E'],
+    ['O',  null, 'E'],
     ['SO', 'S', 'SE'],
   ];
+
+  // Flèches Unicode pour chaque direction
+  static const _arrows = {
+    'NO': '↖', 'N': '↑', 'NE': '↗',
+    'O':  '←',            'E':  '→',
+    'SO': '↙', 'S': '↓', 'SE': '↘',
+  };
 
   Widget _buildCompassButton(String? dir) {
     final isCenter = dir == null;
@@ -37,27 +44,32 @@ class _RadiusPickerSheetState extends ConsumerState<RadiusPickerSheet> {
       onTap: () => setState(() => _selectedDirection = dir),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
-        width: 52,
-        height: 52,
+        width: 56,
+        height: 56,
         margin: const EdgeInsets.all(3),
         decoration: BoxDecoration(
           color: isSelected ? AppColors.terra.withValues(alpha: 0.12) : AppColors.white,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: isSelected ? AppColors.terra : AppColors.sandLight,
-            width: isSelected ? 1.5 : 1,
+            width: isSelected ? 2 : 1,
           ),
+          boxShadow: isSelected
+              ? [BoxShadow(color: AppColors.terra.withValues(alpha: 0.15), blurRadius: 6, offset: const Offset(0, 2))]
+              : null,
         ),
         child: Center(
-          child: Text(
-            isCenter ? '🎲' : dir,
-            style: TextStyle(
-              fontSize: isCenter ? 20 : 13,
-              fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-              color: isSelected ? AppColors.terra : AppColors.sand,
-              letterSpacing: 0.3,
-            ),
-          ),
+          child: isCenter
+              ? const Text('🎲', style: TextStyle(fontSize: 22))
+              : Text(
+                  _arrows[dir]!,
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w500,
+                    color: isSelected ? AppColors.terra : AppColors.sand,
+                    height: 1,
+                  ),
+                ),
         ),
       ),
     );
@@ -88,7 +100,7 @@ class _RadiusPickerSheetState extends ConsumerState<RadiusPickerSheet> {
           ),
           const SizedBox(height: 20),
 
-          // ── Rayon ──────────────────────────────────────────────────────────
+          // ── Rayon ────────────────────────────────────────────────────────────
           Text('Jusqu\'où veux-tu aller ?', style: AppText.sectionTitle),
           const SizedBox(height: 14),
 
@@ -144,7 +156,7 @@ class _RadiusPickerSheetState extends ConsumerState<RadiusPickerSheet> {
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
-                        '$radiusCost crédits',
+                        AppConstants.testMode ? 'Gratuit' : '$radiusCost crédits',
                         style: AppText.label.copyWith(
                           letterSpacing: 0,
                           fontWeight: FontWeight.bold,
@@ -160,10 +172,8 @@ class _RadiusPickerSheetState extends ConsumerState<RadiusPickerSheet> {
 
           const SizedBox(height: 20),
 
-          // ── Direction ──────────────────────────────────────────────────────
+          // ── Direction ────────────────────────────────────────────────────────
           Text('Dans quelle direction ?', style: AppText.sectionTitle),
-          const SizedBox(height: 4),
-          Text('🎲 = aléatoire', style: AppText.label.copyWith(letterSpacing: 0)),
           const SizedBox(height: 12),
 
           Center(
@@ -177,22 +187,9 @@ class _RadiusPickerSheetState extends ConsumerState<RadiusPickerSheet> {
             ),
           ),
 
-          const SizedBox(height: 20),
+          const SizedBox(height: 24),
 
-          // ── Solde + bouton ─────────────────────────────────────────────────
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text('Ton solde :', style: AppText.label.copyWith(letterSpacing: 0)),
-              Text(
-                '${wallet.credits} crédits',
-                style: AppText.metric.copyWith(color: AppColors.forest, fontWeight: FontWeight.bold),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 16),
-
+          // ── Bouton CTA ───────────────────────────────────────────────────────
           if (!hasQuests)
             Center(
               child: Text(
@@ -202,29 +199,65 @@ class _RadiusPickerSheetState extends ConsumerState<RadiusPickerSheet> {
               ),
             )
           else
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: canAfford
-                    ? () => Navigator.of(context).pop(
-                          (radius: _selectedRadius, direction: _selectedDirection),
-                        )
-                    : null,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: canAfford ? AppColors.ink : AppColors.sandLight,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                ),
-                child: Text(
-                  canAfford ? 'C\'est parti !' : 'Pas assez de crédits',
-                  style: AppText.metric.copyWith(
-                    color: canAfford ? AppColors.parchment : AppColors.sand,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
+            _CtaButton(
+              canAfford: canAfford,
+              onTap: canAfford
+                  ? () => Navigator.of(context).pop(
+                        (radius: _selectedRadius, direction: _selectedDirection),
+                      )
+                  : null,
             ),
         ],
+      ),
+    );
+  }
+}
+
+// ─── Bouton CTA gradient ──────────────────────────────────────────────────────
+
+class _CtaButton extends StatelessWidget {
+  final bool canAfford;
+  final VoidCallback? onTap;
+
+  const _CtaButton({required this.canAfford, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 17),
+        decoration: BoxDecoration(
+          gradient: canAfford
+              ? const LinearGradient(
+                  colors: [Color(0xFFFFB800), Color(0xFFFF8C00)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                )
+              : null,
+          color: canAfford ? null : AppColors.sandLight,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: canAfford
+              ? [
+                  BoxShadow(
+                    color: const Color(0xFFFFB800).withValues(alpha: 0.40),
+                    blurRadius: 14,
+                    offset: const Offset(0, 5),
+                  ),
+                ]
+              : null,
+        ),
+        child: Text(
+          canAfford ? 'C\'est parti !' : 'Pas assez de crédits',
+          textAlign: TextAlign.center,
+          style: AppText.metric.copyWith(
+            fontWeight: FontWeight.w800,
+            fontSize: 16,
+            color: canAfford ? Colors.white : AppColors.sand,
+          ),
+        ),
       ),
     );
   }
